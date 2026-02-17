@@ -5,6 +5,10 @@ A desktop application that generates visual fingerprints of video files. It extr
 ![Python](https://img.shields.io/badge/python-3.7+-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
 
+## Example Output
+
+![Sample fingerprint grid](sample.webp)
+
 ## What It Does
 
 Movie Finger Prints samples frames at regular intervals throughout a video and arranges them into a grid. The result is a high-resolution image that lets you see the visual arc of an entire film, TV episode, or any video at a glance — color palettes, scene transitions, lighting shifts, and overall composition.
