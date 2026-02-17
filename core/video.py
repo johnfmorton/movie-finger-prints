@@ -98,6 +98,8 @@ def extract_frames(
 
     for i in range(extract_count):
         timestamp = interval * i + interval / 2  # sample mid-interval
+        # Clamp to stay within video duration
+        timestamp = min(timestamp, info.duration - 0.01)
         out_path = os.path.join(tmp_dir, f"frame_{i:06d}.jpg")
 
         cmd = [
@@ -109,17 +111,27 @@ def extract_frames(
             "-q:v", "2",
             out_path,
         ]
-        subprocess.run(cmd, capture_output=True, check=True)
-        extracted_paths.append(out_path)
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode == 0 and os.path.isfile(out_path):
+            extracted_paths.append(out_path)
 
         if progress_callback:
             progress_callback(i + 1, extract_count + 1)  # +1 for compositing step
 
     if skip_black:
         filtered = [p for p in extracted_paths if not is_black_frame(p)]
-        # If filtering removed too many, fall back to including some black frames
+        # If filtering removed too many, fall back to all extracted frames
         if len(filtered) < count:
             filtered = extracted_paths
-        return filtered[:count]
+        return _evenly_sample(filtered, count)
 
     return extracted_paths[:count]
+
+
+def _evenly_sample(items: list, count: int) -> list:
+    """Pick `count` evenly-spaced items from a list to preserve full coverage."""
+    n = len(items)
+    if n <= count:
+        return items
+    # Evenly spaced indices across the full list
+    return [items[round(i * (n - 1) / (count - 1))] for i in range(count)]
