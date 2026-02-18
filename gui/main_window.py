@@ -31,6 +31,8 @@ from core.video import extract_frames, probe_video
 from gui.grid_preview import GridPreviewWidget
 
 
+VERSION = "1.0.0"
+
 ARTWORK_PRESETS = {
     "MacBook Pro 16\" (3456x2234)": (3456, 2234),
     "MacBook Pro 14\" (3024x1964)": (3024, 1964),
@@ -454,6 +456,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.generate_btn)
 
         layout.addStretch()
+
+        # --- Version footer ---
+        version_label = QLabel(f"v{VERSION}")
+        version_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        version_label.setStyleSheet("color: gray; font-size: 11px;")
+        layout.addWidget(version_label)
 
         # Initialize preview
         self._update_preview()
