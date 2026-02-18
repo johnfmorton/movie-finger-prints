@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 from core.compositor import compose_grid
 from core.fill_order import FillOrder, compute_fill_order
+from core.quadtree import SubdivisionStyle, generate_quadtree, cells_to_pixel_rects
 from core.video import extract_frames, probe_video
 from gui.grid_preview import GridPreviewWidget
 
@@ -81,6 +82,8 @@ class GenerateWorker(QThread):
         cell_labels: str = "none",
         fill_positions: list[tuple[int, int]] | None = None,
         video_duration: float = 0.0,
+        cell_rects: list[tuple[int, int, int, int]] | None = None,
+        total_frames_override: int | None = None,
     ):
         super().__init__()
         self.video_path = video_path
@@ -97,11 +100,13 @@ class GenerateWorker(QThread):
         self.cell_labels = cell_labels
         self.fill_positions = fill_positions
         self.video_duration = video_duration
+        self.cell_rects = cell_rects
+        self.total_frames_override = total_frames_override
         self._tmp_dir = None
 
     def run(self):
         try:
-            total_frames = self.rows * self.cols
+            total_frames = self.total_frames_override or self.rows * self.cols
 
             def on_progress(current, total):
                 self.progress.emit(current, total, "Extracting frames")
@@ -139,6 +144,7 @@ class GenerateWorker(QThread):
                 cell_labels=self.cell_labels,
                 fill_positions=self.fill_positions,
                 frame_timestamps=frame_timestamps,
+                cell_rects=self.cell_rects,
             )
 
             # Clean up temp frames
@@ -161,6 +167,7 @@ class MainWindow(QMainWindow):
         self._video_info = None
         self._worker = None
         self._custom_bg_color = (0, 0, 0)
+        self._quadtree_cells = []
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -181,44 +188,101 @@ class MainWindow(QMainWindow):
 
         # --- Grid Settings ---
         grid_group = QGroupBox("Grid Settings")
-        grid_layout = QHBoxLayout(grid_group)
+        grid_layout = QVBoxLayout(grid_group)
 
-        grid_layout.addWidget(QLabel("Columns:"))
+        # Grid Mode selector
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Grid Mode:"))
+        self.grid_mode_combo = QComboBox()
+        self.grid_mode_combo.addItems(["Standard", "Quadtree"])
+        self.grid_mode_combo.currentTextChanged.connect(self._on_grid_mode_changed)
+        mode_row.addWidget(self.grid_mode_combo)
+        mode_row.addStretch()
+        grid_layout.addLayout(mode_row)
+
+        # Standard mode controls
+        self._standard_row = QWidget()
+        std_layout = QHBoxLayout(self._standard_row)
+        std_layout.setContentsMargins(0, 0, 0, 0)
+
+        std_layout.addWidget(QLabel("Columns:"))
         self.cols_spin = QSpinBox()
         self.cols_spin.setRange(1, 200)
         self.cols_spin.setValue(30)
         self.cols_spin.valueChanged.connect(self._update_total_frames)
-        grid_layout.addWidget(self.cols_spin)
+        std_layout.addWidget(self.cols_spin)
 
-        grid_layout.addSpacing(20)
+        std_layout.addSpacing(20)
 
-        grid_layout.addWidget(QLabel("Rows:"))
+        std_layout.addWidget(QLabel("Rows:"))
         self.rows_spin = QSpinBox()
         self.rows_spin.setRange(1, 200)
         self.rows_spin.setValue(20)
         self.rows_spin.valueChanged.connect(self._update_total_frames)
-        grid_layout.addWidget(self.rows_spin)
+        std_layout.addWidget(self.rows_spin)
 
-        grid_layout.addSpacing(20)
+        std_layout.addSpacing(20)
 
         self.total_frames_label = QLabel("Total frames: 600")
-        grid_layout.addWidget(self.total_frames_label)
-        grid_layout.addStretch()
+        std_layout.addWidget(self.total_frames_label)
+        std_layout.addStretch()
+        grid_layout.addWidget(self._standard_row)
+
+        # Quadtree mode controls
+        self._quadtree_row = QWidget()
+        qt_layout = QHBoxLayout(self._quadtree_row)
+        qt_layout.setContentsMargins(0, 0, 0, 0)
+
+        qt_layout.addWidget(QLabel("Depth:"))
+        self.qt_depth_spin = QSpinBox()
+        self.qt_depth_spin.setRange(1, 6)
+        self.qt_depth_spin.setValue(3)
+        self.qt_depth_spin.valueChanged.connect(self._update_quadtree)
+        qt_layout.addWidget(self.qt_depth_spin)
+
+        qt_layout.addSpacing(10)
+
+        qt_layout.addWidget(QLabel("Style:"))
+        self.qt_style_combo = QComboBox()
+        for style in SubdivisionStyle:
+            self.qt_style_combo.addItem(style.value)
+        self.qt_style_combo.currentTextChanged.connect(self._update_quadtree)
+        qt_layout.addWidget(self.qt_style_combo)
+
+        qt_layout.addSpacing(10)
+
+        qt_layout.addWidget(QLabel("Seed:"))
+        self.qt_seed_spin = QSpinBox()
+        self.qt_seed_spin.setRange(0, 9999)
+        self.qt_seed_spin.setValue(42)
+        self.qt_seed_spin.valueChanged.connect(self._update_quadtree)
+        qt_layout.addWidget(self.qt_seed_spin)
+
+        qt_layout.addSpacing(10)
+
+        self.qt_total_label = QLabel("Cells: —")
+        qt_layout.addWidget(self.qt_total_label)
+        qt_layout.addStretch()
+        self._quadtree_row.setVisible(False)
+        grid_layout.addWidget(self._quadtree_row)
+
         layout.addWidget(grid_group)
 
         # --- Grid Preview ---
         preview_group = QGroupBox("Grid Preview")
         preview_layout = QVBoxLayout(preview_group)
 
-        order_row = QHBoxLayout()
-        order_row.addWidget(QLabel("Fill Order:"))
+        self._fill_order_row = QWidget()
+        order_row_layout = QHBoxLayout(self._fill_order_row)
+        order_row_layout.setContentsMargins(0, 0, 0, 0)
+        order_row_layout.addWidget(QLabel("Fill Order:"))
         self.fill_order_combo = QComboBox()
         for order in FillOrder:
             self.fill_order_combo.addItem(order.value)
         self.fill_order_combo.currentTextChanged.connect(self._on_fill_order_changed)
-        order_row.addWidget(self.fill_order_combo, stretch=1)
-        order_row.addStretch()
-        preview_layout.addLayout(order_row)
+        order_row_layout.addWidget(self.fill_order_combo, stretch=1)
+        order_row_layout.addStretch()
+        preview_layout.addWidget(self._fill_order_row)
 
         self.grid_preview = GridPreviewWidget()
         preview_layout.addWidget(self.grid_preview)
@@ -444,6 +508,37 @@ class MainWindow(QMainWindow):
                 path += ext
             self.output_path_edit.setText(path)
 
+    def _is_quadtree_mode(self) -> bool:
+        return self.grid_mode_combo.currentText() == "Quadtree"
+
+    def _on_grid_mode_changed(self):
+        qt_mode = self._is_quadtree_mode()
+        self._standard_row.setVisible(not qt_mode)
+        self._quadtree_row.setVisible(qt_mode)
+        self._fill_order_row.setVisible(not qt_mode)
+        if qt_mode:
+            self._update_quadtree()
+        else:
+            self.grid_preview.clear_quadtree()
+            self._update_preview()
+            self._update_total_frames()
+
+    def _update_quadtree(self):
+        style_text = self.qt_style_combo.currentText()
+        style = SubdivisionStyle.BALANCED
+        for s in SubdivisionStyle:
+            if s.value == style_text:
+                style = s
+                break
+        cells = generate_quadtree(
+            self.qt_depth_spin.value(),
+            style,
+            seed=self.qt_seed_spin.value(),
+        )
+        self._quadtree_cells = cells
+        self.qt_total_label.setText(f"Cells: {len(cells)}")
+        self.grid_preview.set_quadtree_cells(cells)
+
     def _update_total_frames(self):
         total = self.cols_spin.value() * self.rows_spin.value()
         self.total_frames_label.setText(f"Total frames: {total}")
@@ -524,6 +619,10 @@ class MainWindow(QMainWindow):
         self.bg_color_combo.setEnabled(enabled)
         self.cell_labels_combo.setEnabled(enabled)
         self.fill_order_combo.setEnabled(enabled)
+        self.grid_mode_combo.setEnabled(enabled)
+        self.qt_depth_spin.setEnabled(enabled)
+        self.qt_style_combo.setEnabled(enabled)
+        self.qt_seed_spin.setEnabled(enabled)
 
     def _generate(self):
         video_path = self.video_path_edit.text()
@@ -553,12 +652,22 @@ class MainWindow(QMainWindow):
         background_color = self._get_background_color()
         cell_labels = self._get_cell_labels()
 
-        # Fill order
-        fill_order = self._get_fill_order()
-        fill_positions = compute_fill_order(rows, cols, fill_order)
-
         # Video duration for timestamps
         video_duration = self._video_info.duration if self._video_info else 0.0
+
+        # Quadtree or standard mode
+        cell_rects = None
+        total_frames_override = None
+        fill_positions = None
+
+        if self._is_quadtree_mode():
+            cell_rects = cells_to_pixel_rects(
+                self._quadtree_cells, output_w, output_h, padding=padding,
+            )
+            total_frames_override = len(self._quadtree_cells)
+        else:
+            fill_order = self._get_fill_order()
+            fill_positions = compute_fill_order(rows, cols, fill_order)
 
         self._set_controls_enabled(False)
         self.progress_bar.setValue(0)
@@ -579,6 +688,8 @@ class MainWindow(QMainWindow):
             cell_labels=cell_labels,
             fill_positions=fill_positions,
             video_duration=video_duration,
+            cell_rects=cell_rects,
+            total_frames_override=total_frames_override,
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)

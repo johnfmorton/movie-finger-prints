@@ -49,10 +49,43 @@ def compose_grid(
     cell_labels: str = "none",
     fill_positions: list[tuple[int, int]] | None = None,
     frame_timestamps: list[str] | None = None,
+    cell_rects: list[tuple[int, int, int, int]] | None = None,
 ) -> None:
     """Compose extracted frames into a grid image and save."""
     canvas = Image.new("RGB", (output_width, output_height), background_color)
 
+    if cell_rects is not None:
+        _compose_quadtree(canvas, frame_paths, cell_rects, cell_labels, frame_timestamps)
+    else:
+        _compose_uniform(
+            canvas, frame_paths, rows, cols, output_width, output_height,
+            padding, cell_labels, fill_positions, frame_timestamps,
+        )
+
+    # Save with format-specific options
+    fmt_upper = output_format.upper()
+    if fmt_upper == "JPEG":
+        canvas.save(output_path, "JPEG", quality=jpeg_quality, subsampling=0)
+    elif fmt_upper == "WEBP":
+        canvas.save(output_path, "WEBP", quality=jpeg_quality)
+    elif fmt_upper == "TIFF":
+        canvas.save(output_path, "TIFF", compression="tiff_lzw")
+    else:
+        canvas.save(output_path, "PNG")
+
+
+def _compose_uniform(
+    canvas: Image.Image,
+    frame_paths: list[str],
+    rows: int,
+    cols: int,
+    output_width: int,
+    output_height: int,
+    padding: int,
+    cell_labels: str,
+    fill_positions: list[tuple[int, int]] | None,
+    frame_timestamps: list[str] | None,
+) -> None:
     # Calculate cell dimensions accounting for padding gaps
     h_gaps = cols - 1
     v_gaps = rows - 1
@@ -72,6 +105,7 @@ def compose_grid(
     # Prepare label drawing
     draw = None
     font = None
+    font_size = 0
     if cell_labels != "none" and cell_h_int >= 20:
         draw = ImageDraw.Draw(canvas)
         font_size = max(10, min(cell_h_int // 4, cell_w_int // 4, 24))
@@ -111,13 +145,34 @@ def compose_grid(
                 draw.text((lx + 1, ly + 1), label_text, fill=(0, 0, 0), font=font)
                 draw.text((lx, ly), label_text, fill=(255, 255, 255), font=font)
 
-    # Save with format-specific options
-    fmt_upper = output_format.upper()
-    if fmt_upper == "JPEG":
-        canvas.save(output_path, "JPEG", quality=jpeg_quality, subsampling=0)
-    elif fmt_upper == "WEBP":
-        canvas.save(output_path, "WEBP", quality=jpeg_quality)
-    elif fmt_upper == "TIFF":
-        canvas.save(output_path, "TIFF", compression="tiff_lzw")
-    else:
-        canvas.save(output_path, "PNG")
+
+def _compose_quadtree(
+    canvas: Image.Image,
+    frame_paths: list[str],
+    cell_rects: list[tuple[int, int, int, int]],
+    cell_labels: str,
+    frame_timestamps: list[str] | None,
+) -> None:
+    draw = ImageDraw.Draw(canvas) if cell_labels != "none" else None
+
+    for idx, (frame_path, (cx, cy, cw, ch)) in enumerate(zip(frame_paths, cell_rects)):
+        img = Image.open(frame_path)
+        img = _center_crop_resize(img, cw, ch)
+        canvas.paste(img, (cx, cy))
+
+        # Draw cell label — skip when cell is too small
+        if draw and ch >= 20 and cw >= 30:
+            if cell_labels == "frame_number":
+                label_text = str(idx + 1)
+            elif cell_labels == "timestamp" and frame_timestamps and idx < len(frame_timestamps):
+                label_text = frame_timestamps[idx]
+            else:
+                label_text = None
+
+            if label_text:
+                font_size = max(10, min(ch // 4, cw // 4, 24))
+                font = _load_font(font_size)
+                lx = cx + 4
+                ly = cy + ch - font_size - 4
+                draw.text((lx + 1, ly + 1), label_text, fill=(0, 0, 0), font=font)
+                draw.text((lx, ly), label_text, fill=(255, 255, 255), font=font)
