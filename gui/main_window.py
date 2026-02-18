@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import shutil
 import tempfile
@@ -5,6 +7,7 @@ import tempfile
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QFileDialog,
     QGroupBox,
@@ -22,7 +25,9 @@ from PyQt6.QtWidgets import (
 )
 
 from core.compositor import compose_grid
+from core.fill_order import FillOrder, compute_fill_order
 from core.video import extract_frames, probe_video
+from gui.grid_preview import GridPreviewWidget
 
 
 ARTWORK_PRESETS = {
@@ -36,6 +41,20 @@ ARTWORK_PRESETS = {
     "4K UHD (3840x2160)": (3840, 2160),
     "1080p (1920x1080)": (1920, 1080),
     "Custom": (0, 0),
+}
+
+OUTPUT_FORMATS = {
+    "PNG": {"format": "PNG", "ext": ".png", "has_quality": False},
+    "JPEG": {"format": "JPEG", "ext": ".jpg", "has_quality": True},
+    "WebP": {"format": "WEBP", "ext": ".webp", "has_quality": True},
+    "TIFF": {"format": "TIFF", "ext": ".tiff", "has_quality": False},
+}
+
+BACKGROUND_COLORS = {
+    "Black": (0, 0, 0),
+    "White": (255, 255, 255),
+    "Dark Gray": (40, 40, 40),
+    "Custom...": None,
 }
 
 
@@ -55,6 +74,13 @@ class GenerateWorker(QThread):
         output_height: int,
         skip_black: bool,
         output_path: str,
+        output_format: str = "PNG",
+        jpeg_quality: int = 90,
+        padding: int = 0,
+        background_color: tuple[int, int, int] = (0, 0, 0),
+        cell_labels: str = "none",
+        fill_positions: list[tuple[int, int]] | None = None,
+        video_duration: float = 0.0,
     ):
         super().__init__()
         self.video_path = video_path
@@ -64,6 +90,13 @@ class GenerateWorker(QThread):
         self.output_height = output_height
         self.skip_black = skip_black
         self.output_path = output_path
+        self.output_format = output_format
+        self.jpeg_quality = jpeg_quality
+        self.padding = padding
+        self.background_color = background_color
+        self.cell_labels = cell_labels
+        self.fill_positions = fill_positions
+        self.video_duration = video_duration
         self._tmp_dir = None
 
     def run(self):
@@ -82,6 +115,16 @@ class GenerateWorker(QThread):
 
             self.progress.emit(0, 1, "Compositing image")
 
+            # Compute timestamps if needed
+            frame_timestamps = None
+            if self.cell_labels == "timestamp" and self.video_duration > 0:
+                frame_timestamps = []
+                for i in range(len(frame_paths)):
+                    t = self.video_duration * (i + 0.5) / total_frames
+                    mins = int(t // 60)
+                    secs = int(t % 60)
+                    frame_timestamps.append(f"{mins}:{secs:02d}")
+
             compose_grid(
                 frame_paths,
                 self.rows,
@@ -89,6 +132,13 @@ class GenerateWorker(QThread):
                 self.output_width,
                 self.output_height,
                 self.output_path,
+                output_format=self.output_format,
+                jpeg_quality=self.jpeg_quality,
+                padding=self.padding,
+                background_color=self.background_color,
+                cell_labels=self.cell_labels,
+                fill_positions=self.fill_positions,
+                frame_timestamps=frame_timestamps,
             )
 
             # Clean up temp frames
@@ -110,6 +160,7 @@ class MainWindow(QMainWindow):
 
         self._video_info = None
         self._worker = None
+        self._custom_bg_color = (0, 0, 0)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -154,6 +205,28 @@ class MainWindow(QMainWindow):
         grid_layout.addWidget(self.total_frames_label)
         grid_layout.addStretch()
         layout.addWidget(grid_group)
+
+        # --- Grid Preview ---
+        preview_group = QGroupBox("Grid Preview")
+        preview_layout = QVBoxLayout(preview_group)
+
+        order_row = QHBoxLayout()
+        order_row.addWidget(QLabel("Fill Order:"))
+        self.fill_order_combo = QComboBox()
+        for order in FillOrder:
+            self.fill_order_combo.addItem(order.value)
+        self.fill_order_combo.currentTextChanged.connect(self._on_fill_order_changed)
+        order_row.addWidget(self.fill_order_combo, stretch=1)
+        order_row.addStretch()
+        preview_layout.addLayout(order_row)
+
+        self.grid_preview = GridPreviewWidget()
+        preview_layout.addWidget(self.grid_preview)
+        layout.addWidget(preview_group)
+
+        # Connect grid size changes to preview
+        self.cols_spin.valueChanged.connect(self._update_preview)
+        self.rows_spin.valueChanged.connect(self._update_preview)
 
         # --- Cell Aspect Ratio ---
         aspect_group = QGroupBox("Cell Aspect Ratio")
@@ -229,7 +302,60 @@ class MainWindow(QMainWindow):
         dims_row.addStretch()
         output_layout.addLayout(dims_row)
 
+        format_row = QHBoxLayout()
+        format_row.addWidget(QLabel("Format:"))
+        self.format_combo = QComboBox()
+        for name in OUTPUT_FORMATS:
+            self.format_combo.addItem(name)
+        self.format_combo.currentTextChanged.connect(self._on_format_changed)
+        format_row.addWidget(self.format_combo)
+        format_row.addSpacing(20)
+        self.quality_label = QLabel("Quality:")
+        self.quality_label.setEnabled(False)
+        format_row.addWidget(self.quality_label)
+        self.quality_spin = QSpinBox()
+        self.quality_spin.setRange(1, 100)
+        self.quality_spin.setValue(90)
+        self.quality_spin.setEnabled(False)
+        format_row.addWidget(self.quality_spin)
+        format_row.addStretch()
+        output_layout.addLayout(format_row)
+
         layout.addWidget(output_group)
+
+        # --- Styling ---
+        style_group = QGroupBox("Styling")
+        style_layout = QVBoxLayout(style_group)
+
+        padding_row = QHBoxLayout()
+        padding_row.addWidget(QLabel("Padding:"))
+        self.padding_spin = QSpinBox()
+        self.padding_spin.setRange(0, 50)
+        self.padding_spin.setValue(0)
+        self.padding_spin.setSuffix(" px")
+        padding_row.addWidget(self.padding_spin)
+        padding_row.addStretch()
+        style_layout.addLayout(padding_row)
+
+        bg_row = QHBoxLayout()
+        bg_row.addWidget(QLabel("Background:"))
+        self.bg_color_combo = QComboBox()
+        for name in BACKGROUND_COLORS:
+            self.bg_color_combo.addItem(name)
+        self.bg_color_combo.currentTextChanged.connect(self._on_bg_color_changed)
+        bg_row.addWidget(self.bg_color_combo)
+        bg_row.addStretch()
+        style_layout.addLayout(bg_row)
+
+        labels_row = QHBoxLayout()
+        labels_row.addWidget(QLabel("Cell Labels:"))
+        self.cell_labels_combo = QComboBox()
+        self.cell_labels_combo.addItems(["None", "Frame Number", "Timestamp"])
+        labels_row.addWidget(self.cell_labels_combo)
+        labels_row.addStretch()
+        style_layout.addLayout(labels_row)
+
+        layout.addWidget(style_group)
 
         # --- Skip black frames ---
         self.skip_black_cb = QCheckBox("Skip black frames")
@@ -265,6 +391,9 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
+        # Initialize preview
+        self._update_preview()
+
     # --- Slots ---
 
     def _browse_video(self):
@@ -287,7 +416,8 @@ class MainWindow(QMainWindow):
             # Default output name next to the video file
             video_dir = os.path.dirname(path)
             video_name = os.path.splitext(os.path.basename(path))[0]
-            default_output = os.path.join(video_dir, f"{video_name}_fingerprint.png")
+            ext = self._current_format_ext()
+            default_output = os.path.join(video_dir, f"{video_name}_fingerprint{ext}")
             self.output_path_edit.setText(default_output)
 
             self.status_label.setText(
@@ -298,18 +428,34 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", f"Failed to probe video:\n{e}")
             self._video_info = None
 
+    def _current_format_ext(self) -> str:
+        fmt_name = self.format_combo.currentText()
+        return OUTPUT_FORMATS.get(fmt_name, OUTPUT_FORMATS["PNG"])["ext"]
+
     def _browse_output(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Output", "", "PNG Files (*.png);;All Files (*)"
-        )
+        fmt_name = self.format_combo.currentText()
+        fmt_info = OUTPUT_FORMATS.get(fmt_name, OUTPUT_FORMATS["PNG"])
+        ext = fmt_info["ext"]
+        filter_str = f"{fmt_name} Files (*{ext});;All Files (*)"
+
+        path, _ = QFileDialog.getSaveFileName(self, "Save Output", "", filter_str)
         if path:
-            if not path.lower().endswith(".png"):
-                path += ".png"
+            if not path.lower().endswith(ext):
+                path += ext
             self.output_path_edit.setText(path)
 
     def _update_total_frames(self):
         total = self.cols_spin.value() * self.rows_spin.value()
         self.total_frames_label.setText(f"Total frames: {total}")
+
+    def _update_preview(self):
+        self.grid_preview.set_grid(self.rows_spin.value(), self.cols_spin.value())
+
+    def _on_fill_order_changed(self, text: str):
+        for order in FillOrder:
+            if order.value == text:
+                self.grid_preview.set_fill_order(order)
+                break
 
     def _on_aspect_changed(self):
         is_custom = self.aspect_custom.isChecked()
@@ -325,12 +471,59 @@ class MainWindow(QMainWindow):
             self.width_spin.setValue(w)
             self.height_spin.setValue(h)
 
+    def _on_format_changed(self, text: str):
+        fmt_info = OUTPUT_FORMATS.get(text, OUTPUT_FORMATS["PNG"])
+        has_quality = fmt_info["has_quality"]
+        self.quality_label.setEnabled(has_quality)
+        self.quality_spin.setEnabled(has_quality)
+
+        # Update output path extension if one is set
+        current_path = self.output_path_edit.text().strip()
+        if current_path:
+            base, _ = os.path.splitext(current_path)
+            self.output_path_edit.setText(base + fmt_info["ext"])
+
+    def _on_bg_color_changed(self, text: str):
+        if text == "Custom...":
+            from PyQt6.QtGui import QColor
+            color = QColorDialog.getColor(
+                QColor(*self._custom_bg_color), self, "Choose Background Color"
+            )
+            if color.isValid():
+                self._custom_bg_color = (color.red(), color.green(), color.blue())
+
+    def _get_background_color(self) -> tuple[int, int, int]:
+        text = self.bg_color_combo.currentText()
+        if text == "Custom...":
+            return self._custom_bg_color
+        return BACKGROUND_COLORS.get(text, (0, 0, 0))
+
+    def _get_cell_labels(self) -> str:
+        text = self.cell_labels_combo.currentText()
+        if text == "Frame Number":
+            return "frame_number"
+        elif text == "Timestamp":
+            return "timestamp"
+        return "none"
+
+    def _get_fill_order(self) -> FillOrder:
+        text = self.fill_order_combo.currentText()
+        for order in FillOrder:
+            if order.value == text:
+                return order
+        return FillOrder.STANDARD
+
     def _set_controls_enabled(self, enabled: bool):
         self.generate_btn.setEnabled(enabled)
         self.cols_spin.setEnabled(enabled)
         self.rows_spin.setEnabled(enabled)
         self.size_combo.setEnabled(enabled)
         self.skip_black_cb.setEnabled(enabled)
+        self.format_combo.setEnabled(enabled)
+        self.padding_spin.setEnabled(enabled)
+        self.bg_color_combo.setEnabled(enabled)
+        self.cell_labels_combo.setEnabled(enabled)
+        self.fill_order_combo.setEnabled(enabled)
 
     def _generate(self):
         video_path = self.video_path_edit.text()
@@ -349,12 +542,43 @@ class MainWindow(QMainWindow):
         output_h = self.height_spin.value()
         skip_black = self.skip_black_cb.isChecked()
 
+        # Format params
+        fmt_name = self.format_combo.currentText()
+        fmt_info = OUTPUT_FORMATS.get(fmt_name, OUTPUT_FORMATS["PNG"])
+        output_format = fmt_info["format"]
+        jpeg_quality = self.quality_spin.value()
+
+        # Styling params
+        padding = self.padding_spin.value()
+        background_color = self._get_background_color()
+        cell_labels = self._get_cell_labels()
+
+        # Fill order
+        fill_order = self._get_fill_order()
+        fill_positions = compute_fill_order(rows, cols, fill_order)
+
+        # Video duration for timestamps
+        video_duration = self._video_info.duration if self._video_info else 0.0
+
         self._set_controls_enabled(False)
         self.progress_bar.setValue(0)
         self.status_label.setText("Starting...")
 
         self._worker = GenerateWorker(
-            video_path, rows, cols, output_w, output_h, skip_black, output_path
+            video_path,
+            rows,
+            cols,
+            output_w,
+            output_h,
+            skip_black,
+            output_path,
+            output_format=output_format,
+            jpeg_quality=jpeg_quality,
+            padding=padding,
+            background_color=background_color,
+            cell_labels=cell_labels,
+            fill_positions=fill_positions,
+            video_duration=video_duration,
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
