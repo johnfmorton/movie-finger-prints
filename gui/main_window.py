@@ -40,7 +40,7 @@ from gui.frame_picker import FramePickerDialog
 from gui.grid_preview import GridPreviewWidget
 
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 ARTWORK_PRESETS = {
     "MacBook Pro 16\" (3456x2234)": (3456, 2234),
