@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-02-20
+
+### Fixed
+- ffmpeg/ffprobe not found when running as macOS .app bundle due to missing PATH
+
 ## [1.1.0] - 2026-02-20
 
 ### Added
@@ -25,5 +30,6 @@
 - Grid preview for visualizing layout before processing
 - macOS .app bundle via PyInstaller
 
-[Unreleased]: https://github.com/johnfmorton/movie-finger-prints/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/johnfmorton/movie-finger-prints/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/johnfmorton/movie-finger-prints/releases/tag/v1.1.1
 [1.1.0]: https://github.com/johnfmorton/movie-finger-prints/releases/tag/v1.1.0
