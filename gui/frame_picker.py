@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -216,7 +217,10 @@ class FramePickerDialog(QDialog):
 
         self._preview_label = QLabel("Select a position to preview")
         self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_label.setMinimumHeight(300)
+        self._preview_label.setMinimumHeight(200)
+        self._preview_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+        )
         self._preview_label.setStyleSheet(
             "border: 1px solid #444; background: #111;"
         )
