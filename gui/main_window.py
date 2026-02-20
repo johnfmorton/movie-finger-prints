@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QGroupBox,
@@ -35,6 +36,7 @@ from core.highlights import (
 )
 from core.quadtree import SubdivisionStyle, generate_quadtree, cells_to_pixel_rects
 from core.video import extract_frames, extract_frames_at_timestamps, probe_video
+from gui.frame_picker import FramePickerDialog
 from gui.grid_preview import GridPreviewWidget
 
 
@@ -423,6 +425,10 @@ class MainWindow(QMainWindow):
         hl_add_btn = QPushButton("Add")
         hl_add_btn.clicked.connect(self._add_highlight)
         hl_add_row.addWidget(hl_add_btn)
+        self.hl_pick_btn = QPushButton("Pick Frames...")
+        self.hl_pick_btn.setEnabled(False)
+        self.hl_pick_btn.clicked.connect(self._open_frame_picker)
+        hl_add_row.addWidget(self.hl_pick_btn)
         highlight_layout.addLayout(hl_add_row)
 
         self.hl_list = QListWidget()
@@ -653,9 +659,11 @@ class MainWindow(QMainWindow):
                 f"Loaded: {self._video_info.width}x{self._video_info.height}, "
                 f"{self._video_info.duration:.1f}s, ~{self._video_info.frame_count} frames"
             )
+            self.hl_pick_btn.setEnabled(True)
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to probe video:\n{e}")
             self._video_info = None
+            self.hl_pick_btn.setEnabled(False)
 
     def _current_format_ext(self) -> str:
         fmt_name = self.format_combo.currentText()
@@ -760,6 +768,21 @@ class MainWindow(QMainWindow):
         self._refresh_highlight_list()
         self._update_highlight_preview()
 
+    def _open_frame_picker(self):
+        video_path = self.video_path_edit.text()
+        if not video_path or not self._video_info:
+            return
+        dialog = FramePickerDialog(
+            video_path,
+            self._video_info,
+            self._highlight_timestamps or None,
+            self,
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._highlight_timestamps = dialog.get_timestamps()
+            self._refresh_highlight_list()
+            self._update_highlight_preview()
+
     def _refresh_highlight_list(self):
         self.hl_list.clear()
         for ts in self._highlight_timestamps:
@@ -858,6 +881,7 @@ class MainWindow(QMainWindow):
         self.qt_style_combo.setEnabled(enabled)
         self.qt_seed_spin.setEnabled(enabled)
         self.hl_timestamp_edit.setEnabled(enabled)
+        self.hl_pick_btn.setEnabled(enabled and self._video_info is not None)
         self.hl_boost_spin.setEnabled(enabled)
 
     def _generate(self):
