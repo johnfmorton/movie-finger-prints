@@ -17,6 +17,7 @@ class GridPreviewWidget(QWidget):
         self._cols = 5
         self._fill_order = FillOrder.STANDARD
         self._quadtree_cells: list[QuadCell] | None = None
+        self._highlight_cells: list[int] = []
         self.setMinimumHeight(120)
         self.setMaximumHeight(200)
 
@@ -35,6 +36,11 @@ class GridPreviewWidget(QWidget):
 
     def clear_quadtree(self):
         self._quadtree_cells = None
+        self._highlight_cells = []
+        self.update()
+
+    def set_highlight_cells(self, indices: list[int]):
+        self._highlight_cells = list(indices)
         self.update()
 
     def paintEvent(self, event):
@@ -139,6 +145,17 @@ class GridPreviewWidget(QWidget):
 
             painter.setBrush(fill_color)
             painter.drawRect(int(px), int(py), int(pw), int(ph))
+
+            # Draw gold highlight border on selected cells
+            if idx in self._highlight_cells:
+                gold_pen = QPen(QColor(255, 215, 0), 2)  # #FFD700
+                painter.setPen(gold_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(
+                    int(px) + 1, int(py) + 1,
+                    int(pw) - 2, int(ph) - 2,
+                )
+                painter.setPen(pen)
 
             # Draw number when cells are large enough
             if pw >= 18 and ph >= 14:

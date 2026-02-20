@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import subprocess
@@ -81,13 +83,40 @@ def extract_frames(
     count: int,
     skip_black: bool = False,
     progress_callback=None,
+    timestamps: list[float] | None = None,
 ) -> list[str]:
     """Extract evenly-spaced frames from a video file.
 
     Returns a list of file paths to extracted JPEG frames.
+
+    When *timestamps* is provided, extract frames at those exact times
+    instead of computing even intervals.  *count* is still used to
+    determine the target number of output frames.
     """
     info = probe_video(path)
     tmp_dir = tempfile.mkdtemp(prefix="movie_fp_")
+
+    if timestamps is not None:
+        # Use caller-supplied timestamps
+        extracted_paths = []
+        for i, ts in enumerate(timestamps):
+            ts = min(ts, info.duration - 0.01)
+            out_path = os.path.join(tmp_dir, f"frame_{i:06d}.jpg")
+            cmd = [
+                "ffmpeg",
+                "-v", "quiet",
+                "-ss", str(ts),
+                "-i", path,
+                "-frames:v", "1",
+                "-q:v", "2",
+                out_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True)
+            if result.returncode == 0 and os.path.isfile(out_path):
+                extracted_paths.append(out_path)
+            if progress_callback:
+                progress_callback(i + 1, len(timestamps) + 1)
+        return extracted_paths[:count]
 
     # Extract extra frames if we need to filter black ones
     extract_count = int(count * 1.2) if skip_black else count
@@ -126,6 +155,48 @@ def extract_frames(
         return _evenly_sample(filtered, count)
 
     return extracted_paths[:count]
+
+
+def extract_frames_at_timestamps(
+    path: str,
+    timestamps: list[float],
+    progress_callback=None,
+    progress_offset: int = 0,
+    progress_total: int | None = None,
+) -> list[str]:
+    """Extract frames at exact timestamps via ffmpeg.
+
+    Returns a list of temporary JPEG file paths in the same order as *timestamps*.
+    *progress_offset* and *progress_total* allow this to be part of a larger
+    progress sequence.
+    """
+    info = probe_video(path)
+    tmp_dir = tempfile.mkdtemp(prefix="movie_fp_hl_")
+    total = progress_total or len(timestamps)
+
+    extracted_paths: list[str] = []
+    for i, ts in enumerate(timestamps):
+        ts = min(ts, info.duration - 0.01)
+        out_path = os.path.join(tmp_dir, f"highlight_{i:06d}.jpg")
+        cmd = [
+            "ffmpeg",
+            "-v", "quiet",
+            "-ss", str(ts),
+            "-i", path,
+            "-frames:v", "1",
+            "-q:v", "2",
+            out_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode == 0 and os.path.isfile(out_path):
+            extracted_paths.append(out_path)
+        else:
+            extracted_paths.append("")  # placeholder for failed extractions
+
+        if progress_callback:
+            progress_callback(progress_offset + i + 1, total)
+
+    return extracted_paths
 
 
 def _evenly_sample(items: list, count: int) -> list:

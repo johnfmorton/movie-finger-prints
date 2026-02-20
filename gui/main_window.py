@@ -9,11 +9,13 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -26,8 +28,13 @@ from PyQt6.QtWidgets import (
 
 from core.compositor import compose_grid
 from core.fill_order import FillOrder, compute_fill_order
+from core.highlights import (
+    assign_highlights_to_cells,
+    compute_weighted_timestamps,
+    parse_timestamp,
+)
 from core.quadtree import SubdivisionStyle, generate_quadtree, cells_to_pixel_rects
-from core.video import extract_frames, probe_video
+from core.video import extract_frames, extract_frames_at_timestamps, probe_video
 from gui.grid_preview import GridPreviewWidget
 
 
@@ -86,6 +93,9 @@ class GenerateWorker(QThread):
         video_duration: float = 0.0,
         cell_rects: list[tuple[int, int, int, int]] | None = None,
         total_frames_override: int | None = None,
+        highlight_timestamps: list[float] | None = None,
+        highlight_cell_indices: list[int] | None = None,
+        highlight_boost: float = 2.0,
     ):
         super().__init__()
         self.video_path = video_path
@@ -104,33 +114,136 @@ class GenerateWorker(QThread):
         self.video_duration = video_duration
         self.cell_rects = cell_rects
         self.total_frames_override = total_frames_override
+        self.highlight_timestamps = highlight_timestamps or []
+        self.highlight_cell_indices = highlight_cell_indices or []
+        self.highlight_boost = highlight_boost
         self._tmp_dir = None
 
     def run(self):
         try:
             total_frames = self.total_frames_override or self.rows * self.cols
+            tmp_dirs: list[str] = []
 
-            def on_progress(current, total):
-                self.progress.emit(current, total, "Extracting frames")
-
-            frame_paths = extract_frames(
-                self.video_path,
-                total_frames,
-                skip_black=self.skip_black,
-                progress_callback=on_progress,
+            has_highlights = (
+                bool(self.highlight_timestamps)
+                and bool(self.highlight_cell_indices)
+                and self.cell_rects is not None
             )
+
+            if has_highlights:
+                num_highlights = len(self.highlight_timestamps)
+                num_regular = total_frames - num_highlights
+                total_extractions = total_frames  # for progress
+
+                # 1. Extract highlight frames at exact timestamps
+                sorted_hl = sorted(self.highlight_timestamps)
+                hl_paths = extract_frames_at_timestamps(
+                    self.video_path,
+                    sorted_hl,
+                    progress_callback=lambda c, t: self.progress.emit(
+                        c, total_extractions + 1, "Extracting highlight frames"
+                    ),
+                    progress_offset=0,
+                    progress_total=total_extractions + 1,
+                )
+                if hl_paths:
+                    tmp_dirs.append(os.path.dirname(hl_paths[0]))
+
+                # 2. Compute weighted timestamps for regular frames
+                if num_regular > 0:
+                    regular_timestamps = compute_weighted_timestamps(
+                        self.video_duration,
+                        num_regular,
+                        sorted_hl,
+                        boost_factor=self.highlight_boost,
+                    )
+
+                    reg_paths = extract_frames(
+                        self.video_path,
+                        num_regular,
+                        skip_black=self.skip_black,
+                        progress_callback=lambda c, t: self.progress.emit(
+                            num_highlights + c,
+                            total_extractions + 1,
+                            "Extracting frames",
+                        ),
+                        timestamps=regular_timestamps,
+                    )
+                    if reg_paths:
+                        tmp_dirs.append(os.path.dirname(reg_paths[0]))
+                else:
+                    reg_paths = []
+                    regular_timestamps = []
+
+                # 3. Merge: place highlight frames at their cell indices,
+                #    fill remaining cells with regular frames
+                hl_set = set(self.highlight_cell_indices)
+                # Map sorted highlight times -> paths (preserve order matching
+                # sorted_hl since extract returns in that order)
+                # Map original highlight_timestamps order to hl_paths via sorting
+                hl_time_to_path = dict(zip(sorted_hl, hl_paths))
+                # Assign highlight cells in order: cell indices sorted,
+                # highlight times sorted, so pair them up
+                sorted_cell_indices = sorted(self.highlight_cell_indices)
+                hl_cell_to_path = dict(zip(
+                    sorted_cell_indices,
+                    [hl_time_to_path[t] for t in sorted_hl],
+                ))
+
+                frame_paths: list[str] = []
+                reg_idx = 0
+                all_timestamps: list[float] = []  # for timestamp labels
+                for i in range(total_frames):
+                    if i in hl_cell_to_path:
+                        frame_paths.append(hl_cell_to_path[i])
+                        # Find the highlight time for this cell
+                        ci = sorted_cell_indices.index(i)
+                        all_timestamps.append(sorted_hl[ci])
+                    else:
+                        if reg_idx < len(reg_paths):
+                            frame_paths.append(reg_paths[reg_idx])
+                            if reg_idx < len(regular_timestamps):
+                                all_timestamps.append(regular_timestamps[reg_idx])
+                            else:
+                                all_timestamps.append(0.0)
+                            reg_idx += 1
+                        else:
+                            # Shouldn't happen, but safety fallback
+                            frame_paths.append("")
+                            all_timestamps.append(0.0)
+            else:
+                # No highlights — standard path
+                def on_progress(current, total):
+                    self.progress.emit(current, total, "Extracting frames")
+
+                frame_paths = extract_frames(
+                    self.video_path,
+                    total_frames,
+                    skip_black=self.skip_black,
+                    progress_callback=on_progress,
+                )
+                if frame_paths:
+                    tmp_dirs.append(os.path.dirname(frame_paths[0]))
+                all_timestamps = None
 
             self.progress.emit(0, 1, "Compositing image")
 
-            # Compute timestamps if needed
+            # Compute timestamp labels if needed
             frame_timestamps = None
             if self.cell_labels == "timestamp" and self.video_duration > 0:
-                frame_timestamps = []
-                for i in range(len(frame_paths)):
-                    t = self.video_duration * (i + 0.5) / total_frames
-                    mins = int(t // 60)
-                    secs = int(t % 60)
-                    frame_timestamps.append(f"{mins}:{secs:02d}")
+                if all_timestamps:
+                    frame_timestamps = []
+                    for t in all_timestamps:
+                        mins = int(t // 60)
+                        secs = int(t % 60)
+                        frame_timestamps.append(f"{mins}:{secs:02d}")
+                else:
+                    frame_timestamps = []
+                    for i in range(len(frame_paths)):
+                        t = self.video_duration * (i + 0.5) / total_frames
+                        mins = int(t // 60)
+                        secs = int(t % 60)
+                        frame_timestamps.append(f"{mins}:{secs:02d}")
 
             compose_grid(
                 frame_paths,
@@ -150,9 +263,8 @@ class GenerateWorker(QThread):
             )
 
             # Clean up temp frames
-            if frame_paths:
-                self._tmp_dir = os.path.dirname(frame_paths[0])
-                shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            for d in tmp_dirs:
+                shutil.rmtree(d, ignore_errors=True)
 
             self.finished.emit(self.output_path)
 
@@ -170,6 +282,7 @@ class MainWindow(QMainWindow):
         self._worker = None
         self._custom_bg_color = (0, 0, 0)
         self._quadtree_cells = []
+        self._highlight_timestamps: list[float] = []
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -293,6 +406,50 @@ class MainWindow(QMainWindow):
         # Connect grid size changes to preview
         self.cols_spin.valueChanged.connect(self._update_preview)
         self.rows_spin.valueChanged.connect(self._update_preview)
+
+        # --- Highlight Frames ---
+        highlight_group = QGroupBox("Highlight Frames")
+        highlight_layout = QVBoxLayout(highlight_group)
+
+        highlight_layout.addWidget(
+            QLabel("Feature key moments in larger cells")
+        )
+
+        hl_add_row = QHBoxLayout()
+        self.hl_timestamp_edit = QLineEdit()
+        self.hl_timestamp_edit.setPlaceholderText("e.g. 1:23:45")
+        self.hl_timestamp_edit.returnPressed.connect(self._add_highlight)
+        hl_add_row.addWidget(self.hl_timestamp_edit)
+        hl_add_btn = QPushButton("Add")
+        hl_add_btn.clicked.connect(self._add_highlight)
+        hl_add_row.addWidget(hl_add_btn)
+        highlight_layout.addLayout(hl_add_row)
+
+        self.hl_list = QListWidget()
+        self.hl_list.setMaximumHeight(80)
+        highlight_layout.addWidget(self.hl_list)
+
+        hl_bottom_row = QHBoxLayout()
+        hl_remove_btn = QPushButton("Remove")
+        hl_remove_btn.clicked.connect(self._remove_highlight)
+        hl_bottom_row.addWidget(hl_remove_btn)
+        self.hl_count_label = QLabel("0 highlights")
+        hl_bottom_row.addWidget(self.hl_count_label)
+        hl_bottom_row.addStretch()
+        hl_bottom_row.addWidget(QLabel("Boost:"))
+        self.hl_boost_spin = QDoubleSpinBox()
+        self.hl_boost_spin.setRange(1.0, 5.0)
+        self.hl_boost_spin.setValue(2.0)
+        self.hl_boost_spin.setSingleStep(0.5)
+        hl_bottom_row.addWidget(self.hl_boost_spin)
+        highlight_layout.addLayout(hl_bottom_row)
+
+        self._hl_mode_note = QLabel("Applies to variable-sized grid modes")
+        self._hl_mode_note.setStyleSheet("color: gray; font-size: 11px;")
+        self._hl_mode_note.setVisible(not self._is_quadtree_mode())
+        highlight_layout.addWidget(self._hl_mode_note)
+
+        layout.addWidget(highlight_group)
 
         # --- Cell Aspect Ratio ---
         aspect_group = QGroupBox("Cell Aspect Ratio")
@@ -524,6 +681,7 @@ class MainWindow(QMainWindow):
         self._standard_row.setVisible(not qt_mode)
         self._quadtree_row.setVisible(qt_mode)
         self._fill_order_row.setVisible(not qt_mode)
+        self._hl_mode_note.setVisible(not qt_mode)
         if qt_mode:
             self._update_quadtree()
         else:
@@ -546,6 +704,7 @@ class MainWindow(QMainWindow):
         self._quadtree_cells = cells
         self.qt_total_label.setText(f"Cells: {len(cells)}")
         self.grid_preview.set_quadtree_cells(cells)
+        self._update_highlight_preview()
 
     def _update_total_frames(self):
         total = self.cols_spin.value() * self.rows_spin.value()
@@ -559,6 +718,73 @@ class MainWindow(QMainWindow):
             if order.value == text:
                 self.grid_preview.set_fill_order(order)
                 break
+
+    # --- Highlight frame slots ---
+
+    def _add_highlight(self):
+        text = self.hl_timestamp_edit.text().strip()
+        if not text:
+            return
+        try:
+            ts = parse_timestamp(text)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid Timestamp", str(e))
+            return
+
+        # Validate against video duration if loaded
+        if self._video_info and ts > self._video_info.duration:
+            QMessageBox.warning(
+                self,
+                "Out of Range",
+                f"Timestamp {text} exceeds video duration "
+                f"({self._video_info.duration:.1f}s).",
+            )
+            return
+
+        # Deduplicate
+        if ts in self._highlight_timestamps:
+            self.hl_timestamp_edit.clear()
+            return
+
+        self._highlight_timestamps.append(ts)
+        self._highlight_timestamps.sort()
+        self._refresh_highlight_list()
+        self.hl_timestamp_edit.clear()
+        self._update_highlight_preview()
+
+    def _remove_highlight(self):
+        row = self.hl_list.currentRow()
+        if row < 0:
+            return
+        del self._highlight_timestamps[row]
+        self._refresh_highlight_list()
+        self._update_highlight_preview()
+
+    def _refresh_highlight_list(self):
+        self.hl_list.clear()
+        for ts in self._highlight_timestamps:
+            h = int(ts // 3600)
+            m = int((ts % 3600) // 60)
+            s = ts % 60
+            if h > 0:
+                label = f"{h}:{m:02d}:{s:05.2f}"
+            else:
+                label = f"{m}:{s:05.2f}"
+            self.hl_list.addItem(label)
+        n = len(self._highlight_timestamps)
+        self.hl_count_label.setText(
+            f"{n} highlight{'s' if n != 1 else ''}"
+        )
+
+    def _update_highlight_preview(self):
+        if self._is_quadtree_mode() and self._highlight_timestamps and self._quadtree_cells:
+            indices = assign_highlights_to_cells(
+                self._quadtree_cells,
+                len(self._highlight_timestamps),
+            )
+            self.grid_preview.set_highlight_cells(indices)
+        else:
+            self.grid_preview.set_highlight_cells([])
 
     def _on_aspect_changed(self):
         is_custom = self.aspect_custom.isChecked()
@@ -631,6 +857,8 @@ class MainWindow(QMainWindow):
         self.qt_depth_spin.setEnabled(enabled)
         self.qt_style_combo.setEnabled(enabled)
         self.qt_seed_spin.setEnabled(enabled)
+        self.hl_timestamp_edit.setEnabled(enabled)
+        self.hl_boost_spin.setEnabled(enabled)
 
     def _generate(self):
         video_path = self.video_path_edit.text()
@@ -667,12 +895,31 @@ class MainWindow(QMainWindow):
         cell_rects = None
         total_frames_override = None
         fill_positions = None
+        highlight_timestamps = None
+        highlight_cell_indices = None
 
         if self._is_quadtree_mode():
             cell_rects = cells_to_pixel_rects(
                 self._quadtree_cells, output_w, output_h, padding=padding,
             )
             total_frames_override = len(self._quadtree_cells)
+
+            # Highlights in quadtree mode
+            if self._highlight_timestamps:
+                hl_count = len(self._highlight_timestamps)
+                if hl_count > len(self._quadtree_cells):
+                    QMessageBox.warning(
+                        self,
+                        "Too Many Highlights",
+                        f"You have {hl_count} highlights but only "
+                        f"{len(self._quadtree_cells)} cells. "
+                        f"Using the first {len(self._quadtree_cells)}.",
+                    )
+                highlight_timestamps = self._highlight_timestamps[:]
+                highlight_cell_indices = assign_highlights_to_cells(
+                    self._quadtree_cells,
+                    len(highlight_timestamps),
+                )
         else:
             fill_order = self._get_fill_order()
             fill_positions = compute_fill_order(rows, cols, fill_order)
@@ -698,6 +945,9 @@ class MainWindow(QMainWindow):
             video_duration=video_duration,
             cell_rects=cell_rects,
             total_frames_override=total_frames_override,
+            highlight_timestamps=highlight_timestamps,
+            highlight_cell_indices=highlight_cell_indices,
+            highlight_boost=self.hl_boost_spin.value(),
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
