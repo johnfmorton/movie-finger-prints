@@ -5,6 +5,30 @@ from typing import Optional
 from PIL import Image, ImageDraw, ImageFont
 
 
+def _precrop_to_aspect(img: Image.Image, aspect_w: int, aspect_h: int) -> Image.Image:
+    """Center-crop image to match the given aspect ratio without resizing.
+
+    Skips cropping if the image already matches (within tolerance of 0.01).
+    """
+    src_w, src_h = img.size
+    target_ratio = aspect_w / aspect_h
+    src_ratio = src_w / src_h
+
+    if abs(src_ratio - target_ratio) < 0.01:
+        return img
+
+    if src_ratio > target_ratio:
+        # Source is wider — crop sides
+        new_w = int(src_h * target_ratio)
+        offset = (src_w - new_w) // 2
+        return img.crop((offset, 0, offset + new_w, src_h))
+    else:
+        # Source is taller — crop top/bottom
+        new_h = int(src_w / target_ratio)
+        offset = (src_h - new_h) // 2
+        return img.crop((0, offset, src_w, offset + new_h))
+
+
 def _center_crop_resize(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
     """Crop the image to match the target aspect ratio, then resize."""
     src_w, src_h = img.size
@@ -50,16 +74,17 @@ def compose_grid(
     fill_positions: list[tuple[int, int]] | None = None,
     frame_timestamps: list[str] | None = None,
     cell_rects: list[tuple[int, int, int, int]] | None = None,
+    cell_aspect_ratio: tuple[int, int] | None = None,
 ) -> None:
     """Compose extracted frames into a grid image and save."""
     canvas = Image.new("RGB", (output_width, output_height), background_color)
 
     if cell_rects is not None:
-        _compose_quadtree(canvas, frame_paths, cell_rects, cell_labels, frame_timestamps)
+        _compose_quadtree(canvas, frame_paths, cell_rects, cell_labels, frame_timestamps, cell_aspect_ratio)
     else:
         _compose_uniform(
             canvas, frame_paths, rows, cols, output_width, output_height,
-            padding, cell_labels, fill_positions, frame_timestamps,
+            padding, cell_labels, fill_positions, frame_timestamps, cell_aspect_ratio,
         )
 
     # Save with format-specific options
@@ -85,6 +110,7 @@ def _compose_uniform(
     cell_labels: str,
     fill_positions: list[tuple[int, int]] | None,
     frame_timestamps: list[str] | None,
+    cell_aspect_ratio: tuple[int, int] | None = None,
 ) -> None:
     # Calculate cell dimensions accounting for padding gaps
     h_gaps = cols - 1
@@ -126,6 +152,8 @@ def _compose_uniform(
         y = round(row * (cell_h + padding))
 
         img = Image.open(frame_path)
+        if cell_aspect_ratio is not None:
+            img = _precrop_to_aspect(img, cell_aspect_ratio[0], cell_aspect_ratio[1])
         img = _center_crop_resize(img, cell_w_int, cell_h_int)
         canvas.paste(img, (x, y))
 
@@ -152,11 +180,14 @@ def _compose_quadtree(
     cell_rects: list[tuple[int, int, int, int]],
     cell_labels: str,
     frame_timestamps: list[str] | None,
+    cell_aspect_ratio: tuple[int, int] | None = None,
 ) -> None:
     draw = ImageDraw.Draw(canvas) if cell_labels != "none" else None
 
     for idx, (frame_path, (cx, cy, cw, ch)) in enumerate(zip(frame_paths, cell_rects)):
         img = Image.open(frame_path)
+        if cell_aspect_ratio is not None:
+            img = _precrop_to_aspect(img, cell_aspect_ratio[0], cell_aspect_ratio[1])
         img = _center_crop_resize(img, cw, ch)
         canvas.paste(img, (cx, cy))
 

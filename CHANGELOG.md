@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+- Cell Aspect Ratio UI (From video, 16:9, 4:3, 1:1, Custom) now connected to the generation pipeline
+- Frames are pre-cropped to the selected aspect ratio before fitting into cells, removing pillarboxing/letterboxing
+- Works with both Standard and Quadtree grid modes
+
 ## [1.1.1] - 2026-02-20
 
 ### Fixed

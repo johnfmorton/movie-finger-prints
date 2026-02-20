@@ -98,6 +98,7 @@ class GenerateWorker(QThread):
         highlight_timestamps: list[float] | None = None,
         highlight_cell_indices: list[int] | None = None,
         highlight_boost: float = 2.0,
+        cell_aspect_ratio: tuple[int, int] | None = None,
     ):
         super().__init__()
         self.video_path = video_path
@@ -119,6 +120,7 @@ class GenerateWorker(QThread):
         self.highlight_timestamps = highlight_timestamps or []
         self.highlight_cell_indices = highlight_cell_indices or []
         self.highlight_boost = highlight_boost
+        self.cell_aspect_ratio = cell_aspect_ratio
         self._tmp_dir = None
 
     def run(self):
@@ -262,6 +264,7 @@ class GenerateWorker(QThread):
                 fill_positions=self.fill_positions,
                 frame_timestamps=frame_timestamps,
                 cell_rects=self.cell_rects,
+                cell_aspect_ratio=self.cell_aspect_ratio,
             )
 
             # Clean up temp frames
@@ -809,6 +812,20 @@ class MainWindow(QMainWindow):
         else:
             self.grid_preview.set_highlight_cells([])
 
+    def _get_cell_aspect_ratio(self) -> tuple[int, int] | None:
+        """Return the selected cell aspect ratio as (w, h), or None for 'From video'."""
+        if self.aspect_from_video.isChecked():
+            return None
+        if self.aspect_16_9.isChecked():
+            return (16, 9)
+        if self.aspect_4_3.isChecked():
+            return (4, 3)
+        if self.aspect_1_1.isChecked():
+            return (1, 1)
+        if self.aspect_custom.isChecked():
+            return (self.custom_aspect_w.value(), self.custom_aspect_h.value())
+        return None
+
     def _on_aspect_changed(self):
         is_custom = self.aspect_custom.isChecked()
         self.custom_aspect_w.setEnabled(is_custom)
@@ -912,6 +929,9 @@ class MainWindow(QMainWindow):
         background_color = self._get_background_color()
         cell_labels = self._get_cell_labels()
 
+        # Cell aspect ratio
+        cell_aspect_ratio = self._get_cell_aspect_ratio()
+
         # Video duration for timestamps
         video_duration = self._video_info.duration if self._video_info else 0.0
 
@@ -972,6 +992,7 @@ class MainWindow(QMainWindow):
             highlight_timestamps=highlight_timestamps,
             highlight_cell_indices=highlight_cell_indices,
             highlight_boost=self.hl_boost_spin.value(),
+            cell_aspect_ratio=cell_aspect_ratio,
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
