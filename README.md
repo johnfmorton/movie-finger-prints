@@ -45,6 +45,12 @@ pip install -r requirements.txt
 python main.py
 ```
 
+Or, if you use python3:
+
+```bash
+python3 main.py
+```
+
 ### Workflow
 
 1. **Select a video** — supports `.mp4`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.flv`, and `.webm`
