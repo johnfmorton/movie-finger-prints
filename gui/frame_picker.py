@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from core.video import VideoInfo
+from core.video import VideoInfo, find_bin
 
 
 class ThumbnailStripWorker(QThread):
@@ -47,7 +47,7 @@ class ThumbnailStripWorker(QThread):
                 ts = min(ts, self._duration - 0.01)
                 out_path = os.path.join(self._tmp_dir, f"strip_{i:03d}.jpg")
                 cmd = [
-                    "ffmpeg",
+                    find_bin("ffmpeg"),
                     "-v", "quiet",
                     "-ss", str(ts),
                     "-i", self._video_path,
@@ -86,7 +86,7 @@ class SingleFrameWorker(QThread):
                 self.finished.emit(out_path, self._timestamp)
                 return
             cmd = [
-                "ffmpeg",
+                find_bin("ffmpeg"),
                 "-v", "quiet",
                 "-ss", str(self._timestamp),
                 "-i", self._video_path,

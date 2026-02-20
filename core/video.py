@@ -2,11 +2,36 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from functools import lru_cache
 
 from core.filters import is_black_frame
+
+
+_EXTRA_SEARCH_PATHS = [
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/usr/bin",
+]
+
+
+@lru_cache(maxsize=None)
+def find_bin(name: str) -> str:
+    """Locate a binary (e.g. 'ffmpeg') on PATH or common macOS locations."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for d in _EXTRA_SEARCH_PATHS:
+        candidate = os.path.join(d, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    raise FileNotFoundError(
+        f"Could not find '{name}'. Please install it "
+        f"(e.g. brew install ffmpeg) and make sure it is on your PATH."
+    )
 
 
 @dataclass
@@ -27,7 +52,7 @@ def _gcd(a: int, b: int) -> int:
 def probe_video(path: str) -> VideoInfo:
     """Use ffprobe to get video metadata."""
     cmd = [
-        "ffprobe",
+        find_bin("ffprobe"),
         "-v", "quiet",
         "-print_format", "json",
         "-show_format",
@@ -103,7 +128,7 @@ def extract_frames(
             ts = min(ts, info.duration - 0.01)
             out_path = os.path.join(tmp_dir, f"frame_{i:06d}.jpg")
             cmd = [
-                "ffmpeg",
+                find_bin("ffmpeg"),
                 "-v", "quiet",
                 "-ss", str(ts),
                 "-i", path,
@@ -132,7 +157,7 @@ def extract_frames(
         out_path = os.path.join(tmp_dir, f"frame_{i:06d}.jpg")
 
         cmd = [
-            "ffmpeg",
+            find_bin("ffmpeg"),
             "-v", "quiet",
             "-ss", str(timestamp),
             "-i", path,
@@ -179,7 +204,7 @@ def extract_frames_at_timestamps(
         ts = min(ts, info.duration - 0.01)
         out_path = os.path.join(tmp_dir, f"highlight_{i:06d}.jpg")
         cmd = [
-            "ffmpeg",
+            find_bin("ffmpeg"),
             "-v", "quiet",
             "-ss", str(ts),
             "-i", path,
