@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 import re
+from enum import Enum
+
+
+class EmphasisStyle(Enum):
+    BIGGER = "Bigger"
+    RAMP_UP = "Ramp Up"
+    RAMP_DOWN = "Ramp Down"
+    RAMP_UP_DOWN = "Ramp Up & Down"
 
 
 def parse_timestamp(text: str) -> float:
@@ -147,3 +155,150 @@ def assign_highlights_to_cells(
     indexed.sort(key=lambda x: x[1], reverse=True)
     chosen = sorted(i for i, _ in indexed[:num_highlights])
     return chosen
+
+
+def assign_highlights_to_cells_temporal(
+    highlight_times: list[float],
+    video_duration: float,
+    total_frames: int,
+) -> list[int]:
+    """Map highlight timestamps to cell indices by temporal position.
+
+    Each timestamp maps to ``round(ts / duration * (total_frames - 1))``.
+    Collisions are resolved by bumping to the next free cell.
+    Returns sorted cell indices (one per highlight, in timestamp order).
+    """
+    if not highlight_times or total_frames <= 0 or video_duration <= 0:
+        return []
+
+    sorted_times = sorted(highlight_times)
+    used: set[int] = set()
+    indices: list[int] = []
+
+    for ts in sorted_times:
+        ideal = round(ts / video_duration * (total_frames - 1))
+        ideal = max(0, min(ideal, total_frames - 1))
+        idx = ideal
+        # Bump forward on collision, then wrap backward if needed
+        while idx in used and idx < total_frames:
+            idx += 1
+        if idx >= total_frames:
+            idx = ideal - 1
+            while idx in used and idx >= 0:
+                idx -= 1
+        idx = max(0, min(idx, total_frames - 1))
+        used.add(idx)
+        indices.append(idx)
+
+    return sorted(indices)
+
+
+def compute_frame_weights(
+    total_frames: int,
+    highlight_cell_indices: list[int],
+    highlight_emphasis: list[EmphasisStyle],
+    ramp_length: int = 3,
+    size_boost: float = 3.0,
+) -> list[float]:
+    """Compute per-frame size weights based on highlight emphasis styles.
+
+    Normal frames get weight 1.0.  Highlight frames get ``size_boost``.
+    Ramp frames are linearly interpolated from 1.0 to ``size_boost`` over
+    ``ramp_length`` cells.  Overlapping ramps resolve via ``max()``.
+
+    ``highlight_cell_indices`` and ``highlight_emphasis`` must be parallel
+    lists (same length, matched by position after sorting by index).
+    """
+    weights = [1.0] * total_frames
+
+    if not highlight_cell_indices or not highlight_emphasis:
+        return weights
+
+    # Pair indices with emphasis, sorted by index
+    pairs = sorted(zip(highlight_cell_indices, highlight_emphasis), key=lambda p: p[0])
+
+    for cell_idx, style in pairs:
+        if 0 <= cell_idx < total_frames:
+            weights[cell_idx] = max(weights[cell_idx], size_boost)
+
+        # Apply ramps
+        if style in (EmphasisStyle.RAMP_UP, EmphasisStyle.RAMP_UP_DOWN):
+            for step in range(1, ramp_length + 1):
+                ri = cell_idx - step
+                if 0 <= ri < total_frames:
+                    t = 1.0 + (size_boost - 1.0) * (ramp_length - step) / ramp_length
+                    weights[ri] = max(weights[ri], t)
+
+        if style in (EmphasisStyle.RAMP_DOWN, EmphasisStyle.RAMP_UP_DOWN):
+            for step in range(1, ramp_length + 1):
+                ri = cell_idx + step
+                if 0 <= ri < total_frames:
+                    t = 1.0 + (size_boost - 1.0) * (ramp_length - step) / ramp_length
+                    weights[ri] = max(weights[ri], t)
+
+    return weights
+
+
+def compute_weighted_cell_rects(
+    weights: list[float],
+    rows: int,
+    cols: int,
+    canvas_w: int,
+    canvas_h: int,
+    padding: int = 0,
+) -> list[tuple[int, int, int, int]]:
+    """Row-based justified layout where each frame's area is proportional to its weight.
+
+    Frames are chunked into ``rows`` rows of ``cols`` frames each.
+    Row height is proportional to the row's total weight.
+    Frame width within a row is proportional to its individual weight.
+    Padding is applied as inset (same pattern as ``cells_to_pixel_rects``).
+    Returns ``(x, y, w, h)`` pixel tuples compatible with ``_compose_quadtree``.
+    """
+    total_frames = len(weights)
+    inset = padding // 2
+
+    # Chunk weights into rows
+    row_weights: list[list[float]] = []
+    for r in range(rows):
+        start = r * cols
+        end = min(start + cols, total_frames)
+        row_weights.append(weights[start:end])
+
+    # Row heights proportional to sum of weights in each row
+    row_sums = [sum(rw) for rw in row_weights]
+    total_weight = sum(row_sums)
+    if total_weight <= 0:
+        total_weight = 1.0
+
+    rects: list[tuple[int, int, int, int]] = []
+    y_cursor = 0
+
+    for r, rw in enumerate(row_weights):
+        row_sum = row_sums[r]
+        # Integer row height (last row takes remainder)
+        if r == rows - 1:
+            row_h = canvas_h - y_cursor
+        else:
+            row_h = round(row_sum / total_weight * canvas_h)
+
+        x_cursor = 0
+        for i, w in enumerate(rw):
+            # Integer frame width (last frame in row takes remainder)
+            if i == len(rw) - 1:
+                frame_w = canvas_w - x_cursor
+            else:
+                frame_w = round(w / row_sum * canvas_w) if row_sum > 0 else 0
+
+            # Apply padding inset
+            px = x_cursor + inset
+            py = y_cursor + inset
+            pw = max(1, frame_w - padding)
+            ph = max(1, row_h - padding)
+
+            rects.append((px, py, pw, ph))
+            x_cursor += frame_w
+
+        y_cursor += row_h
+
+    return rects

@@ -30,7 +30,11 @@ from PyQt6.QtWidgets import (
 from core.compositor import compose_grid
 from core.fill_order import FillOrder, compute_fill_order
 from core.highlights import (
+    EmphasisStyle,
     assign_highlights_to_cells,
+    assign_highlights_to_cells_temporal,
+    compute_frame_weights,
+    compute_weighted_cell_rects,
     compute_weighted_timestamps,
     parse_timestamp,
 )
@@ -193,6 +197,10 @@ class GenerateWorker(QThread):
                     sorted_cell_indices,
                     [hl_time_to_path[t] for t in sorted_hl],
                 ))
+                # Remove entries with empty paths (failed extractions)
+                hl_cell_to_path = {
+                    k: v for k, v in hl_cell_to_path.items() if v
+                }
 
                 frame_paths: list[str] = []
                 reg_idx = 0
@@ -212,8 +220,9 @@ class GenerateWorker(QThread):
                                 all_timestamps.append(0.0)
                             reg_idx += 1
                         else:
-                            # Shouldn't happen, but safety fallback
-                            frame_paths.append("")
+                            # Reuse last valid frame if extraction fell short
+                            fallback = frame_paths[-1] if frame_paths else ""
+                            frame_paths.append(fallback)
                             all_timestamps.append(0.0)
             else:
                 # No highlights — standard path
@@ -288,6 +297,7 @@ class MainWindow(QMainWindow):
         self._custom_bg_color = (0, 0, 0)
         self._quadtree_cells = []
         self._highlight_timestamps: list[float] = []
+        self._highlight_emphasis: list[EmphasisStyle] = []
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -436,7 +446,19 @@ class MainWindow(QMainWindow):
 
         self.hl_list = QListWidget()
         self.hl_list.setMaximumHeight(80)
+        self.hl_list.currentRowChanged.connect(self._on_highlight_selected)
         highlight_layout.addWidget(self.hl_list)
+
+        emphasis_row = QHBoxLayout()
+        emphasis_row.addWidget(QLabel("Emphasis:"))
+        self.hl_emphasis_combo = QComboBox()
+        for style in EmphasisStyle:
+            self.hl_emphasis_combo.addItem(style.value)
+        self.hl_emphasis_combo.setEnabled(False)
+        self.hl_emphasis_combo.currentTextChanged.connect(self._on_emphasis_changed)
+        emphasis_row.addWidget(self.hl_emphasis_combo)
+        emphasis_row.addStretch()
+        highlight_layout.addLayout(emphasis_row)
 
         hl_bottom_row = QHBoxLayout()
         hl_remove_btn = QPushButton("Remove")
@@ -445,7 +467,7 @@ class MainWindow(QMainWindow):
         self.hl_count_label = QLabel("0 highlights")
         hl_bottom_row.addWidget(self.hl_count_label)
         hl_bottom_row.addStretch()
-        hl_bottom_row.addWidget(QLabel("Boost:"))
+        hl_bottom_row.addWidget(QLabel("Density Boost:"))
         self.hl_boost_spin = QDoubleSpinBox()
         self.hl_boost_spin.setRange(1.0, 5.0)
         self.hl_boost_spin.setValue(2.0)
@@ -453,10 +475,23 @@ class MainWindow(QMainWindow):
         hl_bottom_row.addWidget(self.hl_boost_spin)
         highlight_layout.addLayout(hl_bottom_row)
 
-        self._hl_mode_note = QLabel("Applies to variable-sized grid modes")
-        self._hl_mode_note.setStyleSheet("color: gray; font-size: 11px;")
-        self._hl_mode_note.setVisible(not self._is_quadtree_mode())
-        highlight_layout.addWidget(self._hl_mode_note)
+        hl_params_row = QHBoxLayout()
+        hl_params_row.addWidget(QLabel("Ramp Length:"))
+        self.hl_ramp_spin = QSpinBox()
+        self.hl_ramp_spin.setRange(1, 20)
+        self.hl_ramp_spin.setValue(3)
+        self.hl_ramp_spin.valueChanged.connect(self._update_highlight_preview)
+        hl_params_row.addWidget(self.hl_ramp_spin)
+        hl_params_row.addSpacing(10)
+        hl_params_row.addWidget(QLabel("Size Boost:"))
+        self.hl_size_boost_spin = QDoubleSpinBox()
+        self.hl_size_boost_spin.setRange(1.5, 10.0)
+        self.hl_size_boost_spin.setValue(3.0)
+        self.hl_size_boost_spin.setSingleStep(0.5)
+        self.hl_size_boost_spin.valueChanged.connect(self._update_highlight_preview)
+        hl_params_row.addWidget(self.hl_size_boost_spin)
+        hl_params_row.addStretch()
+        highlight_layout.addLayout(hl_params_row)
 
         layout.addWidget(highlight_group)
 
@@ -691,14 +726,14 @@ class MainWindow(QMainWindow):
         qt_mode = self._is_quadtree_mode()
         self._standard_row.setVisible(not qt_mode)
         self._quadtree_row.setVisible(qt_mode)
-        self._fill_order_row.setVisible(not qt_mode)
-        self._hl_mode_note.setVisible(not qt_mode)
+        self._update_fill_order_enabled()
         if qt_mode:
             self._update_quadtree()
         else:
             self.grid_preview.clear_quadtree()
             self._update_preview()
             self._update_total_frames()
+            self._update_highlight_preview()
 
     def _update_quadtree(self):
         style_text = self.qt_style_combo.currentText()
@@ -732,6 +767,37 @@ class MainWindow(QMainWindow):
 
     # --- Highlight frame slots ---
 
+    def _on_highlight_selected(self, row: int):
+        if row >= 0 and row < len(self._highlight_emphasis):
+            self.hl_emphasis_combo.setEnabled(True)
+            style = self._highlight_emphasis[row]
+            self.hl_emphasis_combo.blockSignals(True)
+            self.hl_emphasis_combo.setCurrentText(style.value)
+            self.hl_emphasis_combo.blockSignals(False)
+        else:
+            self.hl_emphasis_combo.setEnabled(False)
+
+    def _on_emphasis_changed(self, text: str):
+        row = self.hl_list.currentRow()
+        if row < 0 or row >= len(self._highlight_emphasis):
+            return
+        for style in EmphasisStyle:
+            if style.value == text:
+                self._highlight_emphasis[row] = style
+                break
+        self._refresh_highlight_list()
+        # Re-select the same row after refresh
+        self.hl_list.setCurrentRow(row)
+        self._update_highlight_preview()
+
+    def _update_fill_order_enabled(self):
+        """Show/disable fill order row based on mode and highlights."""
+        qt_mode = self._is_quadtree_mode()
+        has_std_highlights = (
+            not qt_mode and bool(self._highlight_timestamps)
+        )
+        self._fill_order_row.setVisible(not qt_mode and not has_std_highlights)
+
     def _add_highlight(self):
         text = self.hl_timestamp_edit.text().strip()
         if not text:
@@ -757,8 +823,11 @@ class MainWindow(QMainWindow):
             self.hl_timestamp_edit.clear()
             return
 
-        self._highlight_timestamps.append(ts)
-        self._highlight_timestamps.sort()
+        # Insert in sorted order, keeping emphasis in sync
+        import bisect
+        idx = bisect.bisect_left(self._highlight_timestamps, ts)
+        self._highlight_timestamps.insert(idx, ts)
+        self._highlight_emphasis.insert(idx, EmphasisStyle.BIGGER)
         self._refresh_highlight_list()
         self.hl_timestamp_edit.clear()
         self._update_highlight_preview()
@@ -768,6 +837,7 @@ class MainWindow(QMainWindow):
         if row < 0:
             return
         del self._highlight_timestamps[row]
+        del self._highlight_emphasis[row]
         self._refresh_highlight_list()
         self._update_highlight_preview()
 
@@ -782,25 +852,35 @@ class MainWindow(QMainWindow):
             self,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._highlight_timestamps = dialog.get_timestamps()
+            new_timestamps = dialog.get_timestamps()
+            # Preserve emphasis for timestamps that still exist
+            old_map = dict(zip(self._highlight_timestamps, self._highlight_emphasis))
+            new_emphasis = [
+                old_map.get(ts, EmphasisStyle.BIGGER) for ts in new_timestamps
+            ]
+            self._highlight_timestamps = new_timestamps
+            self._highlight_emphasis = new_emphasis
             self._refresh_highlight_list()
             self._update_highlight_preview()
 
     def _refresh_highlight_list(self):
         self.hl_list.clear()
-        for ts in self._highlight_timestamps:
+        for i, ts in enumerate(self._highlight_timestamps):
             h = int(ts // 3600)
             m = int((ts % 3600) // 60)
             s = ts % 60
             if h > 0:
-                label = f"{h}:{m:02d}:{s:05.2f}"
+                time_str = f"{h}:{m:02d}:{s:05.2f}"
             else:
-                label = f"{m}:{s:05.2f}"
+                time_str = f"{m}:{s:05.2f}"
+            emphasis = self._highlight_emphasis[i] if i < len(self._highlight_emphasis) else EmphasisStyle.BIGGER
+            label = f"{time_str}  [{emphasis.value}]"
             self.hl_list.addItem(label)
         n = len(self._highlight_timestamps)
         self.hl_count_label.setText(
             f"{n} highlight{'s' if n != 1 else ''}"
         )
+        self._update_fill_order_enabled()
 
     def _update_highlight_preview(self):
         if self._is_quadtree_mode() and self._highlight_timestamps and self._quadtree_cells:
@@ -809,8 +889,31 @@ class MainWindow(QMainWindow):
                 len(self._highlight_timestamps),
             )
             self.grid_preview.set_highlight_cells(indices)
+        elif (
+            not self._is_quadtree_mode()
+            and self._highlight_timestamps
+            and self._video_info
+        ):
+            rows = self.rows_spin.value()
+            cols = self.cols_spin.value()
+            total = rows * cols
+            duration = self._video_info.duration
+
+            cell_indices = assign_highlights_to_cells_temporal(
+                self._highlight_timestamps, duration, total,
+            )
+            weights = compute_frame_weights(
+                total,
+                cell_indices,
+                self._highlight_emphasis,
+                ramp_length=self.hl_ramp_spin.value(),
+                size_boost=self.hl_size_boost_spin.value(),
+            )
+            self.grid_preview.set_weighted_cells(rows, cols, weights, cell_indices)
+            self.grid_preview.set_highlight_cells([])
         else:
             self.grid_preview.set_highlight_cells([])
+            self.grid_preview.clear_weighted_cells()
 
     def _get_cell_aspect_ratio(self) -> tuple[int, int] | None:
         """Return the selected cell aspect ratio as (w, h), or None for 'From video'."""
@@ -900,6 +1003,9 @@ class MainWindow(QMainWindow):
         self.hl_timestamp_edit.setEnabled(enabled)
         self.hl_pick_btn.setEnabled(enabled and self._video_info is not None)
         self.hl_boost_spin.setEnabled(enabled)
+        self.hl_ramp_spin.setEnabled(enabled)
+        self.hl_size_boost_spin.setEnabled(enabled)
+        self.hl_emphasis_combo.setEnabled(enabled and self.hl_list.currentRow() >= 0)
 
     def _generate(self):
         video_path = self.video_path_edit.text()
@@ -965,8 +1071,30 @@ class MainWindow(QMainWindow):
                     len(highlight_timestamps),
                 )
         else:
-            fill_order = self._get_fill_order()
-            fill_positions = compute_fill_order(rows, cols, fill_order)
+            if self._highlight_timestamps and self._video_info:
+                # Standard mode with highlights: weighted layout
+                total = rows * cols
+                duration = self._video_info.duration
+                highlight_cell_indices = assign_highlights_to_cells_temporal(
+                    self._highlight_timestamps, duration, total,
+                )
+                weights = compute_frame_weights(
+                    total,
+                    highlight_cell_indices,
+                    self._highlight_emphasis,
+                    ramp_length=self.hl_ramp_spin.value(),
+                    size_boost=self.hl_size_boost_spin.value(),
+                )
+                cell_rects = compute_weighted_cell_rects(
+                    weights, rows, cols, output_w, output_h, padding=padding,
+                )
+                total_frames_override = total
+                highlight_timestamps = self._highlight_timestamps[:]
+                highlight_cell_indices = list(highlight_cell_indices)
+                fill_positions = None
+            else:
+                fill_order = self._get_fill_order()
+                fill_positions = compute_fill_order(rows, cols, fill_order)
 
         self._set_controls_enabled(False)
         self.progress_bar.setValue(0)
