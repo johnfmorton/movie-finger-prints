@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPen, QFont
 from PyQt6.QtWidgets import QWidget
 
@@ -20,6 +20,8 @@ class GridPreviewWidget(QWidget):
         self._highlight_cells: list[int] = []
         self._weighted_rects: list[tuple[float, float, float, float]] | None = None
         self._weighted_highlight_indices: list[int] = []
+        self._physics_rects: list[tuple[float, float, float, float, float]] | None = None
+        self._physics_highlight_indices: list[int] = []
         self.setMinimumHeight(120)
         self.setMaximumHeight(200)
 
@@ -41,6 +43,23 @@ class GridPreviewWidget(QWidget):
         self._highlight_cells = []
         self._weighted_rects = None
         self._weighted_highlight_indices = []
+        self._physics_rects = None
+        self._physics_highlight_indices = []
+        self.update()
+
+    def set_physics_cells(
+        self,
+        rects: list[tuple[float, float, float, float, float]],
+        highlight_indices: list[int],
+    ):
+        """Set normalized physics rects (x, y, w, h, angle) for preview."""
+        self._physics_rects = rects
+        self._physics_highlight_indices = list(highlight_indices)
+        self.update()
+
+    def clear_physics_cells(self):
+        self._physics_rects = None
+        self._physics_highlight_indices = []
         self.update()
 
     def set_weighted_cells(
@@ -91,7 +110,9 @@ class GridPreviewWidget(QWidget):
         self.update()
 
     def paintEvent(self, event):
-        if self._quadtree_cells is not None:
+        if self._physics_rects is not None:
+            self._paint_physics_grid()
+        elif self._quadtree_cells is not None:
             self._paint_quadtree()
         elif self._weighted_rects is not None:
             self._paint_weighted_grid()
@@ -279,5 +300,59 @@ class GridPreviewWidget(QWidget):
                     str(idx + 1),
                 )
                 painter.setPen(pen)
+
+        painter.end()
+
+    def _paint_physics_grid(self):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w = self.width()
+        h = self.height()
+        margin = 4
+
+        available_w = w - 2 * margin
+        available_h = h - 2 * margin
+
+        rects = self._physics_rects
+        total = len(rects)
+
+        color_start = QColor(59, 130, 246)
+        color_end = QColor(249, 115, 22)
+
+        pen = QPen(QColor(40, 40, 40), 1)
+
+        for idx, (rx, ry, rw, rh, angle) in enumerate(rects):
+            px = margin + rx * available_w
+            py = margin + ry * available_h
+            pw = rw * available_w
+            ph = rh * available_h
+
+            t = idx / max(1, total - 1)
+            red = int(color_start.red() + t * (color_end.red() - color_start.red()))
+            green = int(color_start.green() + t * (color_end.green() - color_start.green()))
+            blue = int(color_start.blue() + t * (color_end.blue() - color_start.blue()))
+            fill_color = QColor(red, green, blue)
+
+            center_x = px + pw / 2
+            center_y = py + ph / 2
+
+            painter.save()
+            painter.translate(center_x, center_y)
+            # Qt rotate() is clockwise; our angle is CCW from pymunk, so negate
+            painter.rotate(-angle)
+
+            painter.setPen(pen)
+            painter.setBrush(fill_color)
+            painter.drawRect(QRectF(-pw / 2, -ph / 2, pw, ph))
+
+            # Gold highlight border
+            if idx in self._physics_highlight_indices:
+                gold_pen = QPen(QColor(255, 215, 0), 2)
+                painter.setPen(gold_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(QRectF(-pw / 2 + 1, -ph / 2 + 1, pw - 2, ph - 2))
+
+            painter.restore()
 
         painter.end()

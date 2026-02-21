@@ -4,6 +4,8 @@ from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
+from core.physics_grid import PhysicsFrameResult
+
 
 def _precrop_to_aspect(img: Image.Image, aspect_w: int, aspect_h: int) -> Image.Image:
     """Center-crop image to match the given aspect ratio without resizing.
@@ -75,11 +77,14 @@ def compose_grid(
     frame_timestamps: list[str] | None = None,
     cell_rects: list[tuple[int, int, int, int]] | None = None,
     cell_aspect_ratio: tuple[int, int] | None = None,
+    physics_results: list[PhysicsFrameResult] | None = None,
 ) -> None:
     """Compose extracted frames into a grid image and save."""
     canvas = Image.new("RGB", (output_width, output_height), background_color)
 
-    if cell_rects is not None:
+    if physics_results is not None:
+        _compose_physics(canvas, frame_paths, physics_results, cell_labels, frame_timestamps, cell_aspect_ratio)
+    elif cell_rects is not None:
         _compose_quadtree(canvas, frame_paths, cell_rects, cell_labels, frame_timestamps, cell_aspect_ratio)
     else:
         _compose_uniform(
@@ -205,5 +210,51 @@ def _compose_quadtree(
                 font = _load_font(font_size)
                 lx = cx + 4
                 ly = cy + ch - font_size - 4
+                draw.text((lx + 1, ly + 1), label_text, fill=(0, 0, 0), font=font)
+                draw.text((lx, ly), label_text, fill=(255, 255, 255), font=font)
+
+
+def _compose_physics(
+    canvas: Image.Image,
+    frame_paths: list[str],
+    physics_results: list[PhysicsFrameResult],
+    cell_labels: str,
+    frame_timestamps: list[str] | None,
+    cell_aspect_ratio: tuple[int, int] | None = None,
+) -> None:
+    draw = ImageDraw.Draw(canvas) if cell_labels != "none" else None
+
+    for idx, (frame_path, pr) in enumerate(zip(frame_paths, physics_results)):
+        img = Image.open(frame_path)
+        if cell_aspect_ratio is not None:
+            img = _precrop_to_aspect(img, cell_aspect_ratio[0], cell_aspect_ratio[1])
+        img = _center_crop_resize(img, pr.w, pr.h)
+
+        if abs(pr.angle) > 0.1:
+            # Rotate: convert to RGBA, rotate with expand, paste with alpha mask
+            img = img.convert("RGBA")
+            rotated = img.rotate(pr.angle, resample=Image.BICUBIC, expand=True)
+            # Center the rotated image on the original position
+            rw, rh = rotated.size
+            paste_x = pr.x - (rw - pr.w) // 2
+            paste_y = pr.y - (rh - pr.h) // 2
+            canvas.paste(rotated, (paste_x, paste_y), rotated)
+        else:
+            canvas.paste(img, (pr.x, pr.y))
+
+        # Draw cell label
+        if draw and pr.h >= 20 and pr.w >= 30:
+            if cell_labels == "frame_number":
+                label_text = str(idx + 1)
+            elif cell_labels == "timestamp" and frame_timestamps and idx < len(frame_timestamps):
+                label_text = frame_timestamps[idx]
+            else:
+                label_text = None
+
+            if label_text:
+                font_size = max(10, min(pr.h // 4, pr.w // 4, 24))
+                font = _load_font(font_size)
+                lx = pr.x + 4
+                ly = pr.y + pr.h - font_size - 4
                 draw.text((lx + 1, ly + 1), label_text, fill=(0, 0, 0), font=font)
                 draw.text((lx, ly), label_text, fill=(255, 255, 255), font=font)

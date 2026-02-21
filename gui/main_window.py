@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 
 from core.compositor import compose_grid
 from core.fill_order import FillOrder, compute_fill_order
+from core.physics_grid import PhysicsFrameResult, compute_physics_layout
 from core.highlights import (
     EmphasisStyle,
     assign_highlights_to_cells,
@@ -103,6 +104,7 @@ class GenerateWorker(QThread):
         highlight_cell_indices: list[int] | None = None,
         highlight_boost: float = 2.0,
         cell_aspect_ratio: tuple[int, int] | None = None,
+        physics_results: list[PhysicsFrameResult] | None = None,
     ):
         super().__init__()
         self.video_path = video_path
@@ -125,6 +127,7 @@ class GenerateWorker(QThread):
         self.highlight_cell_indices = highlight_cell_indices or []
         self.highlight_boost = highlight_boost
         self.cell_aspect_ratio = cell_aspect_ratio
+        self.physics_results = physics_results
         self._tmp_dir = None
 
     def run(self):
@@ -135,7 +138,7 @@ class GenerateWorker(QThread):
             has_highlights = (
                 bool(self.highlight_timestamps)
                 and bool(self.highlight_cell_indices)
-                and self.cell_rects is not None
+                and (self.cell_rects is not None or self.physics_results is not None)
             )
 
             if has_highlights:
@@ -274,6 +277,7 @@ class GenerateWorker(QThread):
                 frame_timestamps=frame_timestamps,
                 cell_rects=self.cell_rects,
                 cell_aspect_ratio=self.cell_aspect_ratio,
+                physics_results=self.physics_results,
             )
 
             # Clean up temp frames
@@ -324,7 +328,7 @@ class MainWindow(QMainWindow):
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Grid Mode:"))
         self.grid_mode_combo = QComboBox()
-        self.grid_mode_combo.addItems(["Standard", "Quadtree"])
+        self.grid_mode_combo.addItems(["Standard", "Quadtree", "Physics"])
         self.grid_mode_combo.currentTextChanged.connect(self._on_grid_mode_changed)
         mode_row.addWidget(self.grid_mode_combo)
         mode_row.addStretch()
@@ -395,6 +399,18 @@ class MainWindow(QMainWindow):
         qt_layout.addStretch()
         self._quadtree_row.setVisible(False)
         grid_layout.addWidget(self._quadtree_row)
+
+        # Physics mode controls
+        self._physics_options_row = QWidget()
+        phys_layout = QHBoxLayout(self._physics_options_row)
+        phys_layout.setContentsMargins(0, 0, 0, 0)
+        self.physics_rotation_cb = QCheckBox("Allow Rotation")
+        self.physics_rotation_cb.setChecked(False)
+        self.physics_rotation_cb.stateChanged.connect(self._update_highlight_preview)
+        phys_layout.addWidget(self.physics_rotation_cb)
+        phys_layout.addStretch()
+        self._physics_options_row.setVisible(False)
+        grid_layout.addWidget(self._physics_options_row)
 
         layout.addWidget(grid_group)
 
@@ -722,10 +738,15 @@ class MainWindow(QMainWindow):
     def _is_quadtree_mode(self) -> bool:
         return self.grid_mode_combo.currentText() == "Quadtree"
 
+    def _is_physics_mode(self) -> bool:
+        return self.grid_mode_combo.currentText() == "Physics"
+
     def _on_grid_mode_changed(self):
         qt_mode = self._is_quadtree_mode()
+        phys_mode = self._is_physics_mode()
         self._standard_row.setVisible(not qt_mode)
         self._quadtree_row.setVisible(qt_mode)
+        self._physics_options_row.setVisible(phys_mode)
         self._update_fill_order_enabled()
         if qt_mode:
             self._update_quadtree()
@@ -793,10 +814,11 @@ class MainWindow(QMainWindow):
     def _update_fill_order_enabled(self):
         """Show/disable fill order row based on mode and highlights."""
         qt_mode = self._is_quadtree_mode()
+        phys_mode = self._is_physics_mode()
         has_std_highlights = (
-            not qt_mode and bool(self._highlight_timestamps)
+            not qt_mode and not phys_mode and bool(self._highlight_timestamps)
         )
-        self._fill_order_row.setVisible(not qt_mode and not has_std_highlights)
+        self._fill_order_row.setVisible(not qt_mode and not phys_mode and not has_std_highlights)
 
     def _add_highlight(self):
         text = self.hl_timestamp_edit.text().strip()
@@ -890,7 +912,52 @@ class MainWindow(QMainWindow):
             )
             self.grid_preview.set_highlight_cells(indices)
         elif (
+            self._is_physics_mode()
+            and self._highlight_timestamps
+            and self._video_info
+        ):
+            rows = self.rows_spin.value()
+            cols = self.cols_spin.value()
+            total = rows * cols
+            duration = self._video_info.duration
+
+            cell_indices = assign_highlights_to_cells_temporal(
+                self._highlight_timestamps, duration, total,
+            )
+            weights = compute_frame_weights(
+                total,
+                cell_indices,
+                self._highlight_emphasis,
+                ramp_length=self.hl_ramp_spin.value(),
+                size_boost=self.hl_size_boost_spin.value(),
+            )
+
+            # Run physics at small virtual canvas for preview speed
+            preview_w, preview_h = 400, 250
+            results = compute_physics_layout(
+                rows, cols, preview_w, preview_h,
+                weights,
+                allow_rotation=self.physics_rotation_cb.isChecked(),
+                max_iterations=500,
+            )
+
+            # Normalize to 0-1 for preview widget
+            norm_rects = [
+                (
+                    r.x / preview_w,
+                    r.y / preview_h,
+                    r.w / preview_w,
+                    r.h / preview_h,
+                    r.angle,
+                )
+                for r in results
+            ]
+            self.grid_preview.set_physics_cells(norm_rects, cell_indices)
+            self.grid_preview.set_highlight_cells([])
+            self.grid_preview.clear_weighted_cells()
+        elif (
             not self._is_quadtree_mode()
+            and not self._is_physics_mode()
             and self._highlight_timestamps
             and self._video_info
         ):
@@ -911,9 +978,11 @@ class MainWindow(QMainWindow):
             )
             self.grid_preview.set_weighted_cells(rows, cols, weights, cell_indices)
             self.grid_preview.set_highlight_cells([])
+            self.grid_preview.clear_physics_cells()
         else:
             self.grid_preview.set_highlight_cells([])
             self.grid_preview.clear_weighted_cells()
+            self.grid_preview.clear_physics_cells()
 
     def _get_cell_aspect_ratio(self) -> tuple[int, int] | None:
         """Return the selected cell aspect ratio as (w, h), or None for 'From video'."""
@@ -1006,6 +1075,7 @@ class MainWindow(QMainWindow):
         self.hl_ramp_spin.setEnabled(enabled)
         self.hl_size_boost_spin.setEnabled(enabled)
         self.hl_emphasis_combo.setEnabled(enabled and self.hl_list.currentRow() >= 0)
+        self.physics_rotation_cb.setEnabled(enabled)
 
     def _generate(self):
         video_path = self.video_path_edit.text()
@@ -1041,12 +1111,13 @@ class MainWindow(QMainWindow):
         # Video duration for timestamps
         video_duration = self._video_info.duration if self._video_info else 0.0
 
-        # Quadtree or standard mode
+        # Quadtree, Physics, or Standard mode
         cell_rects = None
         total_frames_override = None
         fill_positions = None
         highlight_timestamps = None
         highlight_cell_indices = None
+        physics_results = None
 
         if self._is_quadtree_mode():
             cell_rects = cells_to_pixel_rects(
@@ -1070,6 +1141,32 @@ class MainWindow(QMainWindow):
                     self._quadtree_cells,
                     len(highlight_timestamps),
                 )
+        elif self._is_physics_mode():
+            total = rows * cols
+            total_frames_override = total
+            if self._highlight_timestamps and self._video_info:
+                duration = self._video_info.duration
+                highlight_cell_indices = assign_highlights_to_cells_temporal(
+                    self._highlight_timestamps, duration, total,
+                )
+                weights = compute_frame_weights(
+                    total,
+                    highlight_cell_indices,
+                    self._highlight_emphasis,
+                    ramp_length=self.hl_ramp_spin.value(),
+                    size_boost=self.hl_size_boost_spin.value(),
+                )
+                highlight_timestamps = self._highlight_timestamps[:]
+                highlight_cell_indices = list(highlight_cell_indices)
+            else:
+                weights = [1.0] * total
+
+            physics_results = compute_physics_layout(
+                rows, cols, output_w, output_h,
+                weights,
+                allow_rotation=self.physics_rotation_cb.isChecked(),
+                padding=padding,
+            )
         else:
             if self._highlight_timestamps and self._video_info:
                 # Standard mode with highlights: weighted layout
@@ -1121,6 +1218,7 @@ class MainWindow(QMainWindow):
             highlight_cell_indices=highlight_cell_indices,
             highlight_boost=self.hl_boost_spin.value(),
             cell_aspect_ratio=cell_aspect_ratio,
+            physics_results=physics_results,
         )
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
