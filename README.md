@@ -48,15 +48,29 @@ pip install -r requirements.txt
 
 ## Usage
 
+Run the app from source on any platform:
+
 ```bash
 python main.py
-```
-
-Or, if you use python3:
-
-```bash
+# or
 python3 main.py
 ```
+
+### Building the macOS App (optional)
+
+You can build a standalone `.app` bundle on macOS using [PyInstaller](https://pyinstaller.org/):
+
+```bash
+# Install PyInstaller if you don't have it
+pip install pyinstaller
+
+# Build the app
+python3 -m PyInstaller "Movie Finger Print.spec" -y
+```
+
+The built app will be at `dist/Movie Finger Print.app`. You can drag it to your Applications folder or run it directly. No Python installation is needed to run the `.app` — all dependencies are bundled inside it.
+
+> **Note:** The `.app` bundle is macOS-only. Windows and Linux users can run the app from source using `python main.py` — the GUI and all features work cross-platform.
 
 ### Workflow
 
