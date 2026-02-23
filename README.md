@@ -1,6 +1,6 @@
 # Movie Finger Prints
 
-A desktop application that generates visual fingerprints of video files. It extracts evenly-spaced frames from a video and composes them into a single grid image, creating a compact visual summary of the entire video's content.
+_Movie Finger Prints_ is a desktop application that transforms a video file into a single visual artifact — a poster composed of frames extracted across the entire runtime.
 
 ![Python](https://img.shields.io/badge/python-3.7+-blue)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)
@@ -11,9 +11,16 @@ A desktop application that generates visual fingerprints of video files. It extr
 
 ## What It Does
 
-Movie Finger Prints samples frames at regular intervals throughout a video and arranges them into a grid. The result is a high-resolution image that lets you see the visual arc of an entire film, TV episode, or any video at a glance — color palettes, scene transitions, lighting shifts, and overall composition.
+_Movie Finger Prints_ analyzes the timeline, extracts evenly spaced frame captures, and composes them into a single image using flexible layout strategies. The result is a poster-like artifact that encodes the video’s visual progression from start to finish.
 
-A 30x20 grid (the default) captures 600 frames. For a 2-hour movie, that's roughly one frame every 12 seconds.
+Features include:
+
+* Configurable frame density
+* Multiple layout modes
+* Key-frame highlighting options
+* High-resolution export
+
+The output is both analytical and aesthetic — part summary, part artwork.
 
 ## Prerequisites
 
