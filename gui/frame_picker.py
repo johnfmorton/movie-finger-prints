@@ -143,7 +143,7 @@ class FramePickerDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("Pick Highlight Frames")
-        self.setMinimumSize(700, 550)
+        self.setMinimumSize(700, 650)
 
         self._video_path = video_path
         self._video_info = video_info
@@ -219,7 +219,7 @@ class FramePickerDialog(QDialog):
         self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_label.setMinimumHeight(200)
         self._preview_label.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding
         )
         self._preview_label.setStyleSheet(
             "border: 1px solid #444; background: #111;"
