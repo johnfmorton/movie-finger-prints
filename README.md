@@ -7,7 +7,13 @@ _Movie Finger Prints_ is a desktop application that transforms a video file into
 
 ## Example Output
 
-![Sample fingerprint grid](sample.webp)
+**Standard Grid** — evenly spaced frames arranged in a uniform column-and-row layout.
+
+![Sample standard grid](sample.webp)
+
+**Quadtree Grid** — recursive subdivision creates variable-sized cells for a mosaic effect.
+
+![Sample quadtree grid](sample-quad.webp)
 
 ## What It Does
 
