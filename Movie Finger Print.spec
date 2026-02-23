@@ -4,7 +4,10 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('gui/style.qss', 'gui'),
+        ('gui/icons', 'gui/icons'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
