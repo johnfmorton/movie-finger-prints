@@ -2,10 +2,26 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-02-23
+
+### Added
+- Two-column layout with scrollable area for small-screen fallback
+- Collapsible sections replacing group boxes for a cleaner UI
+- Modern light theme via QSS stylesheet (white cards, blue accent, styled inputs)
+- Physics grid mode with pymunk collision simulation
+- Per-key-frame emphasis styles in standard grid mode
+- Custom spin box arrow icons for better visibility
+
+### Changed
+- Minimum window width increased to 950px with 1050x750 default size
+- Generate button styled as primary action (blue)
+- Frame picker dialog minimum height increased for better layout
+
 ### Fixed
-- Cell Aspect Ratio UI (From video, 16:9, 4:3, 1:1, Custom) now connected to the generation pipeline
-- Frames are pre-cropped to the selected aspect ratio before fitting into cells, removing pillarboxing/letterboxing
-- Works with both Standard and Quadtree grid modes
+- Cell Aspect Ratio UI now connected to the generation pipeline
+- Frames are pre-cropped to the selected aspect ratio before fitting into cells
+- Frame preview no longer overlaps slider and step buttons in picker dialog
+- Frame picker thumbnails and help text updated for light theme consistency
 
 ## [1.1.1] - 2026-02-20
 
@@ -35,6 +51,7 @@
 - Grid preview for visualizing layout before processing
 - macOS .app bundle via PyInstaller
 
-[Unreleased]: https://github.com/johnfmorton/movie-finger-prints/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/johnfmorton/movie-finger-prints/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/johnfmorton/movie-finger-prints/releases/tag/v1.2.0
 [1.1.1]: https://github.com/johnfmorton/movie-finger-prints/releases/tag/v1.1.1
 [1.1.0]: https://github.com/johnfmorton/movie-finger-prints/releases/tag/v1.1.0
