@@ -12,7 +12,6 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
     QFileDialog,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -22,6 +21,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -41,6 +41,7 @@ from core.highlights import (
 )
 from core.quadtree import SubdivisionStyle, generate_quadtree, cells_to_pixel_rects
 from core.video import extract_frames, extract_frames_at_timestamps, probe_video
+from gui.collapsible_section import CollapsibleSection
 from gui.frame_picker import FramePickerDialog
 from gui.grid_preview import GridPreviewWidget
 
@@ -294,7 +295,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Movie Finger Print")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(950)
+        self.resize(1050, 750)
 
         self._video_info = None
         self._worker = None
@@ -307,8 +309,9 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
 
-        # --- Video file ---
+        # ── Top bar: Video file ──
         file_layout = QHBoxLayout()
         file_layout.addWidget(QLabel("Video File:"))
         self.video_path_edit = QLineEdit()
@@ -320,9 +323,30 @@ class MainWindow(QMainWindow):
         file_layout.addWidget(browse_btn)
         layout.addLayout(file_layout)
 
+        # ── Scroll area with two-column layout ──
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll_content = QWidget()
+        columns_layout = QHBoxLayout(scroll_content)
+        columns_layout.setSpacing(12)
+        columns_layout.setContentsMargins(0, 0, 0, 0)
+
+        left_column = QVBoxLayout()
+        left_column.setSpacing(12)
+        right_column = QVBoxLayout()
+        right_column.setSpacing(12)
+        columns_layout.addLayout(left_column, stretch=1)
+        columns_layout.addLayout(right_column, stretch=1)
+
+        scroll_area.setWidget(scroll_content)
+        layout.addWidget(scroll_area, stretch=1)
+
+        # ══════════ LEFT COLUMN ══════════
+
         # --- Grid Settings ---
-        grid_group = QGroupBox("Grid Settings")
-        grid_layout = QVBoxLayout(grid_group)
+        grid_section = CollapsibleSection("Grid Settings")
+        grid_layout = grid_section.content_layout()
 
         # Grid Mode selector
         mode_row = QHBoxLayout()
@@ -412,11 +436,11 @@ class MainWindow(QMainWindow):
         self._physics_options_row.setVisible(False)
         grid_layout.addWidget(self._physics_options_row)
 
-        layout.addWidget(grid_group)
+        left_column.addWidget(grid_section)
 
         # --- Grid Preview ---
-        preview_group = QGroupBox("Grid Preview")
-        preview_layout = QVBoxLayout(preview_group)
+        preview_section = CollapsibleSection("Grid Preview")
+        preview_layout = preview_section.content_layout()
 
         self._fill_order_row = QWidget()
         order_row_layout = QHBoxLayout(self._fill_order_row)
@@ -432,15 +456,15 @@ class MainWindow(QMainWindow):
 
         self.grid_preview = GridPreviewWidget()
         preview_layout.addWidget(self.grid_preview)
-        layout.addWidget(preview_group)
+        left_column.addWidget(preview_section)
 
         # Connect grid size changes to preview
         self.cols_spin.valueChanged.connect(self._update_preview)
         self.rows_spin.valueChanged.connect(self._update_preview)
 
         # --- Highlight Frames ---
-        highlight_group = QGroupBox("Highlight Frames")
-        highlight_layout = QVBoxLayout(highlight_group)
+        highlight_section = CollapsibleSection("Highlight Frames")
+        highlight_layout = highlight_section.content_layout()
 
         highlight_layout.addWidget(
             QLabel("Feature key moments in larger cells")
@@ -509,11 +533,14 @@ class MainWindow(QMainWindow):
         hl_params_row.addStretch()
         highlight_layout.addLayout(hl_params_row)
 
-        layout.addWidget(highlight_group)
+        left_column.addWidget(highlight_section)
+        left_column.addStretch()
+
+        # ══════════ RIGHT COLUMN ══════════
 
         # --- Cell Aspect Ratio ---
-        aspect_group = QGroupBox("Cell Aspect Ratio")
-        aspect_layout = QVBoxLayout(aspect_group)
+        aspect_section = CollapsibleSection("Cell Aspect Ratio")
+        aspect_layout = aspect_section.content_layout()
 
         self.aspect_from_video = QRadioButton("From video")
         self.aspect_from_video.setChecked(True)
@@ -553,11 +580,11 @@ class MainWindow(QMainWindow):
         custom_row.addStretch()
         aspect_layout.addLayout(custom_row)
 
-        layout.addWidget(aspect_group)
+        right_column.addWidget(aspect_section)
 
         # --- Output Settings ---
-        output_group = QGroupBox("Output Settings")
-        output_layout = QVBoxLayout(output_group)
+        output_section = CollapsibleSection("Output Settings")
+        output_layout = output_section.content_layout()
 
         size_row = QHBoxLayout()
         size_row.addWidget(QLabel("Artwork Size:"))
@@ -604,11 +631,11 @@ class MainWindow(QMainWindow):
         format_row.addStretch()
         output_layout.addLayout(format_row)
 
-        layout.addWidget(output_group)
+        right_column.addWidget(output_section)
 
         # --- Styling ---
-        style_group = QGroupBox("Styling")
-        style_layout = QVBoxLayout(style_group)
+        style_section = CollapsibleSection("Styling")
+        style_layout = style_section.content_layout()
 
         padding_row = QHBoxLayout()
         padding_row.addWidget(QLabel("Padding:"))
@@ -638,7 +665,10 @@ class MainWindow(QMainWindow):
         labels_row.addStretch()
         style_layout.addLayout(labels_row)
 
-        layout.addWidget(style_group)
+        right_column.addWidget(style_section)
+        right_column.addStretch()
+
+        # ── Bottom bar ──
 
         # --- Skip black frames ---
         self.skip_black_cb = QCheckBox("Skip black frames")
@@ -660,7 +690,7 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
-        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setTextVisible(False)
         layout.addWidget(self.progress_bar)
 
         self.status_label = QLabel("")
@@ -668,16 +698,15 @@ class MainWindow(QMainWindow):
 
         # --- Generate button ---
         self.generate_btn = QPushButton("Generate")
+        self.generate_btn.setObjectName("primaryButton")
         self.generate_btn.setMinimumHeight(40)
         self.generate_btn.clicked.connect(self._generate)
         layout.addWidget(self.generate_btn)
 
-        layout.addStretch()
-
         # --- Version footer ---
         version_label = QLabel(f"v{VERSION}")
+        version_label.setObjectName("secondaryLabel")
         version_label.setAlignment(Qt.AlignmentFlag.AlignRight)
-        version_label.setStyleSheet("color: gray; font-size: 11px;")
         layout.addWidget(version_label)
 
         # Initialize preview

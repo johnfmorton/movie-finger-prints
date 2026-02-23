@@ -115,7 +115,7 @@ class ClickableThumbnail(QLabel):
         self.setFixedSize(80, 45)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setStyleSheet(
-            "border: 1px solid #555; background: #222;"
+            "border: 1px solid #d2d2d7; background: #f5f5f7;"
         )
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -180,7 +180,7 @@ class FramePickerDialog(QDialog):
             "part of the video."
         )
         strip_help.setWordWrap(True)
-        strip_help.setStyleSheet("color: #aaa; font-size: 11px;")
+        strip_help.setStyleSheet("color: #86868b; font-size: 11px;")
         layout.addWidget(strip_help)
 
         self._strip_loading_label = QLabel("Loading thumbnails...")
@@ -212,7 +212,7 @@ class FramePickerDialog(QDialog):
             "Option+Arrow steps 10 frames."
         )
         preview_help.setWordWrap(True)
-        preview_help.setStyleSheet("color: #aaa; font-size: 11px;")
+        preview_help.setStyleSheet("color: #86868b; font-size: 11px;")
         layout.addWidget(preview_help)
 
         self._preview_label = QLabel("Select a position to preview")

@@ -1,0 +1,264 @@
+/* ── App background ── */
+QMainWindow, QDialog {
+    background-color: #f0f0f0;
+    color: #1d1d1f;
+    font-size: 13px;
+}
+
+/* ── Collapsible section cards ── */
+#collapsibleSection {
+    background-color: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+}
+
+#sectionHeader {
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid #e0e0e0;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #1d1d1f;
+    text-align: left;
+    padding: 11px 14px;
+}
+
+#sectionHeader:hover {
+    background-color: #f5f5f7;
+}
+
+#sectionContent {
+    background: transparent;
+    border: none;
+}
+
+/* ── Inputs: QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox ── */
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    background-color: #ffffff;
+    border: 1px solid #d2d2d7;
+    border-radius: 6px;
+    padding: 5px 8px;
+    min-height: 20px;
+    color: #1d1d1f;
+    selection-background-color: #007AFF;
+    selection-color: #ffffff;
+}
+
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    border: 2px solid #007AFF;
+    padding: 4px 7px;
+}
+
+/* ── Spin box buttons ── */
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 28px;
+    border-left: 1px solid #d2d2d7;
+    border-bottom: 1px solid #e8e8ed;
+    border-top-right-radius: 5px;
+    background-color: #f5f5f7;
+}
+
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 28px;
+    border-left: 1px solid #d2d2d7;
+    border-bottom-right-radius: 5px;
+    background-color: #f5f5f7;
+}
+
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background-color: #e8e8ed;
+}
+
+QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+    background-color: #dcdce0;
+}
+
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    image: url(gui/icons/arrow_up.png);
+    width: 14px;
+    height: 8px;
+}
+
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    image: url(gui/icons/arrow_down.png);
+    width: 14px;
+    height: 8px;
+}
+
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {
+    image: url(gui/icons/arrow_up_disabled.png);
+}
+
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {
+    image: url(gui/icons/arrow_down_disabled.png);
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 20px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #ffffff;
+    border: 1px solid #d2d2d7;
+    border-radius: 6px;
+    selection-background-color: #007AFF;
+    selection-color: #ffffff;
+}
+
+/* ── Primary button (Generate) ── */
+#primaryButton {
+    background-color: #007AFF;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    padding: 8px 16px;
+}
+
+#primaryButton:hover {
+    background-color: #0066DD;
+}
+
+#primaryButton:pressed {
+    background-color: #0055BB;
+}
+
+#primaryButton:disabled {
+    background-color: #b0b0b5;
+}
+
+/* ── Secondary buttons ── */
+QPushButton {
+    background-color: #ffffff;
+    border: 1px solid #d2d2d7;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #1d1d1f;
+}
+
+QPushButton:hover {
+    border-color: #007AFF;
+    color: #007AFF;
+}
+
+QPushButton:pressed {
+    background-color: #f0f0f2;
+}
+
+QPushButton:disabled {
+    color: #b0b0b5;
+    border-color: #e8e8ed;
+}
+
+/* ── Progress bar ── */
+QProgressBar {
+    background-color: #e8e8ed;
+    border: none;
+    border-radius: 4px;
+    text-align: center;
+    color: #1d1d1f;
+    min-height: 8px;
+    max-height: 8px;
+}
+
+QProgressBar::chunk {
+    background-color: #007AFF;
+    border-radius: 4px;
+}
+
+/* ── Labels ── */
+QLabel {
+    color: #1d1d1f;
+    background: transparent;
+}
+
+#secondaryLabel {
+    color: #86868b;
+    font-size: 11px;
+}
+
+/* ── List widget ── */
+QListWidget {
+    background-color: #ffffff;
+    border: 1px solid #d2d2d7;
+    border-radius: 6px;
+    color: #1d1d1f;
+}
+
+QListWidget::item:selected {
+    background-color: #007AFF;
+    color: #ffffff;
+}
+
+/* ── Radio buttons & checkboxes ── */
+QRadioButton, QCheckBox {
+    color: #1d1d1f;
+    spacing: 6px;
+}
+
+/* ── Scroll area ── */
+QScrollArea {
+    border: none;
+    background: transparent;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 8px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background: #c0c0c0;
+    border-radius: 4px;
+    min-height: 20px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+    height: 0;
+}
+
+QScrollBar:horizontal {
+    background: transparent;
+    height: 8px;
+    margin: 0;
+}
+
+QScrollBar::handle:horizontal {
+    background: #c0c0c0;
+    border-radius: 4px;
+    min-width: 20px;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: none;
+    width: 0;
+}
+
+/* ── Slider (frame picker) ── */
+QSlider::groove:horizontal {
+    background: #e8e8ed;
+    height: 4px;
+    border-radius: 2px;
+}
+
+QSlider::handle:horizontal {
+    background: #007AFF;
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
