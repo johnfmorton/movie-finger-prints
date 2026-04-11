@@ -6,6 +6,7 @@ import tempfile
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -353,6 +354,8 @@ class MainWindow(QMainWindow):
         mode_row.addWidget(QLabel("Grid Mode:"))
         self.grid_mode_combo = QComboBox()
         self.grid_mode_combo.addItems(["Standard", "Quadtree", "Physics"])
+        self.grid_mode_combo.setMinimumContentsLength(10)
+        self.grid_mode_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.grid_mode_combo.currentTextChanged.connect(self._on_grid_mode_changed)
         mode_row.addWidget(self.grid_mode_combo)
         mode_row.addStretch()
@@ -402,6 +405,8 @@ class MainWindow(QMainWindow):
 
         qt_layout.addWidget(QLabel("Style:"))
         self.qt_style_combo = QComboBox()
+        self.qt_style_combo.setMinimumContentsLength(15)
+        self.qt_style_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         for style in SubdivisionStyle:
             self.qt_style_combo.addItem(style.value)
         self.qt_style_combo.currentTextChanged.connect(self._update_quadtree)
@@ -580,6 +585,42 @@ class MainWindow(QMainWindow):
         custom_row.addStretch()
         aspect_layout.addLayout(custom_row)
 
+        # --- Crop / Preserve toggle ---
+        crop_mode_row = QHBoxLayout()
+        self.crop_mode_group = QButtonGroup(self)
+        self.crop_to_fit_rb = QRadioButton("Crop to fit")
+        self.crop_to_fit_rb.setChecked(True)
+        self.preserve_aspect_rb = QRadioButton("Preserve aspect ratio")
+        self.crop_mode_group.addButton(self.crop_to_fit_rb)
+        self.crop_mode_group.addButton(self.preserve_aspect_rb)
+        self.crop_to_fit_rb.toggled.connect(self._on_crop_mode_changed)
+        crop_mode_row.addWidget(self.crop_to_fit_rb)
+        crop_mode_row.addWidget(self.preserve_aspect_rb)
+        crop_mode_row.addStretch()
+        aspect_layout.addLayout(crop_mode_row)
+
+        # Lock dimension controls (visible only in preserve mode)
+        self._lock_row_container = QWidget()
+        lock_row = QHBoxLayout(self._lock_row_container)
+        lock_row.setContentsMargins(0, 0, 0, 0)
+        lock_row.addWidget(QLabel("Lock:"))
+        self.lock_dim_group = QButtonGroup(self)
+        self.lock_width_rb = QRadioButton("Width")
+        self.lock_width_rb.setChecked(True)
+        self.lock_height_rb = QRadioButton("Height")
+        self.lock_dim_group.addButton(self.lock_width_rb)
+        self.lock_dim_group.addButton(self.lock_height_rb)
+        self.lock_width_rb.toggled.connect(self._recalc_preserve_dimension)
+        lock_row.addWidget(self.lock_width_rb)
+        lock_row.addWidget(self.lock_height_rb)
+        lock_row.addSpacing(10)
+        self.adjusted_dim_label = QLabel("")
+        self.adjusted_dim_label.setStyleSheet("color: #888; font-style: italic;")
+        lock_row.addWidget(self.adjusted_dim_label)
+        lock_row.addStretch()
+        self._lock_row_container.setVisible(False)
+        aspect_layout.addWidget(self._lock_row_container)
+
         right_column.addWidget(aspect_section)
 
         # --- Output Settings ---
@@ -633,6 +674,14 @@ class MainWindow(QMainWindow):
 
         right_column.addWidget(output_section)
 
+        # Connect signals for preserve-aspect recalculation
+        self.cols_spin.valueChanged.connect(self._recalc_preserve_dimension)
+        self.rows_spin.valueChanged.connect(self._recalc_preserve_dimension)
+        self.width_spin.valueChanged.connect(self._recalc_preserve_dimension)
+        self.height_spin.valueChanged.connect(self._recalc_preserve_dimension)
+        self.custom_aspect_w.valueChanged.connect(self._recalc_preserve_dimension)
+        self.custom_aspect_h.valueChanged.connect(self._recalc_preserve_dimension)
+
         # --- Styling ---
         style_section = CollapsibleSection("Styling")
         style_layout = style_section.content_layout()
@@ -666,6 +715,7 @@ class MainWindow(QMainWindow):
         style_layout.addLayout(labels_row)
 
         right_column.addWidget(style_section)
+        self.padding_spin.valueChanged.connect(self._recalc_preserve_dimension)
         right_column.addStretch()
 
         # ── Bottom bar ──
@@ -743,6 +793,7 @@ class MainWindow(QMainWindow):
                 f"{self._video_info.duration:.1f}s, ~{self._video_info.frame_count} frames"
             )
             self.hl_pick_btn.setEnabled(True)
+            self._recalc_preserve_dimension()
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to probe video:\n{e}")
             self._video_info = None
@@ -1031,15 +1082,87 @@ class MainWindow(QMainWindow):
         is_custom = self.aspect_custom.isChecked()
         self.custom_aspect_w.setEnabled(is_custom)
         self.custom_aspect_h.setEnabled(is_custom)
+        self._recalc_preserve_dimension()
+
+    def _on_crop_mode_changed(self):
+        preserve = self.preserve_aspect_rb.isChecked()
+        self._lock_row_container.setVisible(preserve)
+        if preserve:
+            self._recalc_preserve_dimension()
+        else:
+            self.adjusted_dim_label.setText("")
+            # Restore spinbox states from current preset
+            self._on_size_preset_changed(self.size_combo.currentText())
+
+    def _recalc_preserve_dimension(self):
+        """Recalculate and display the adjusted output dimension for preserve-aspect mode."""
+        if not self.preserve_aspect_rb.isChecked():
+            return
+
+        aspect = self._get_cell_aspect_ratio()
+        if aspect is None:
+            # "From video" mode — need video info
+            if self._video_info is None:
+                self.adjusted_dim_label.setText("(load video first)")
+                return
+            aspect = self._video_info.aspect_ratio
+
+        aspect_w, aspect_h = aspect
+        cols = self.cols_spin.value()
+        rows = self.rows_spin.value()
+        padding = self.padding_spin.value()
+        is_custom_preset = self.size_combo.currentText() == "Custom"
+
+        if self.lock_width_rb.isChecked():
+            output_w = self.width_spin.value()
+            cell_w = (output_w - padding * (cols - 1)) / cols
+            required_cell_h = cell_w * aspect_h / aspect_w
+            new_h = max(1, round(required_cell_h * rows + padding * (rows - 1)))
+            new_h = min(new_h, 20000)
+
+            self.height_spin.blockSignals(True)
+            self.height_spin.setValue(new_h)
+            self.height_spin.blockSignals(False)
+            self.height_spin.setEnabled(False)
+            self.width_spin.setEnabled(is_custom_preset)
+
+            self.adjusted_dim_label.setText(f"Output: {output_w} \u00d7 {new_h}")
+        else:
+            output_h = self.height_spin.value()
+            cell_h = (output_h - padding * (rows - 1)) / rows
+            required_cell_w = cell_h * aspect_w / aspect_h
+            new_w = max(1, round(required_cell_w * cols + padding * (cols - 1)))
+            new_w = min(new_w, 20000)
+
+            self.width_spin.blockSignals(True)
+            self.width_spin.setValue(new_w)
+            self.width_spin.blockSignals(False)
+            self.width_spin.setEnabled(False)
+            self.height_spin.setEnabled(is_custom_preset)
+
+            self.adjusted_dim_label.setText(f"Output: {new_w} \u00d7 {output_h}")
 
     def _on_size_preset_changed(self, text: str):
         is_custom = text == "Custom"
-        self.width_spin.setEnabled(is_custom)
-        self.height_spin.setEnabled(is_custom)
-        if not is_custom and text in ARTWORK_PRESETS:
-            w, h = ARTWORK_PRESETS[text]
-            self.width_spin.setValue(w)
-            self.height_spin.setValue(h)
+        if self.preserve_aspect_rb.isChecked():
+            if not is_custom and text in ARTWORK_PRESETS:
+                w, h = ARTWORK_PRESETS[text]
+                if self.lock_width_rb.isChecked():
+                    self.width_spin.blockSignals(True)
+                    self.width_spin.setValue(w)
+                    self.width_spin.blockSignals(False)
+                else:
+                    self.height_spin.blockSignals(True)
+                    self.height_spin.setValue(h)
+                    self.height_spin.blockSignals(False)
+            self._recalc_preserve_dimension()
+        else:
+            self.width_spin.setEnabled(is_custom)
+            self.height_spin.setEnabled(is_custom)
+            if not is_custom and text in ARTWORK_PRESETS:
+                w, h = ARTWORK_PRESETS[text]
+                self.width_spin.setValue(w)
+                self.height_spin.setValue(h)
 
     def _on_format_changed(self, text: str):
         fmt_info = OUTPUT_FORMATS.get(text, OUTPUT_FORMATS["PNG"])
@@ -1105,6 +1228,10 @@ class MainWindow(QMainWindow):
         self.hl_size_boost_spin.setEnabled(enabled)
         self.hl_emphasis_combo.setEnabled(enabled and self.hl_list.currentRow() >= 0)
         self.physics_rotation_cb.setEnabled(enabled)
+        self.crop_to_fit_rb.setEnabled(enabled)
+        self.preserve_aspect_rb.setEnabled(enabled)
+        self.lock_width_rb.setEnabled(enabled)
+        self.lock_height_rb.setEnabled(enabled)
 
     def _generate(self):
         video_path = self.video_path_edit.text()
